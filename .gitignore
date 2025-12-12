@@ -11,3 +11,6 @@ __pycache__/
 
 # Mac
 .DS_Store
+# Local SQLite DB
+backend/linkguard.db
+*.db
