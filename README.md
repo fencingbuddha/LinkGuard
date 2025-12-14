@@ -1,4 +1,4 @@
-# LinkGuard# LinkGuard
+# LinkGuard
 
 LinkGuard is a lightweight phishing and malicious link analysis service designed to be simple, fast, and API-first. The goal is to provide organizations with an easy way to evaluate URLs and record scan activity without requiring deep cybersecurity expertise.
 
@@ -10,7 +10,8 @@ This repository contains the **backend API** for LinkGuard, built with FastAPI a
 
 - API key–based authentication (per organization)
 - URL analysis endpoint (`POST /api/analyze-url`)
-- Scan event logging per organization
+- Deterministic URL risk analysis (IP-based URLs, suspicious TLDs, subdomains, typosquatting)
+- Organization-scoped scan context (`org_id`)
 - SQLite database for fast local iteration
 - Clean project structure designed to scale into a SaaS
 
@@ -32,9 +33,12 @@ backend/
 ├── app/
 │   ├── api/          # API routes & dependencies
 │   ├── models/       # SQLAlchemy ORM models
-│   ├── services/     # Business logic (future)
+│   ├── services/     # Business logic (URL analysis)
 │   ├── db.py         # Database configuration
 │   └── main.py       # FastAPI app entrypoint
+├── tests/            # Unit + API tests (pytest)
+├── scripts/          # Dev utilities (API key seeding)
+├── pytest.ini        # Pytest configuration
 ├── linkguard.db      # Local SQLite DB (gitignored)
 └── requirements.txt
 
@@ -47,6 +51,17 @@ All protected endpoints require an API key passed via the request header:
 X-API-Key: <your_api_key>
 
 API keys are associated with an organization and validated on every request.
+
+### Creating a Dev API Key
+
+For local development, an API key can be created using the provided seed script:
+
+```bash
+cd backend
+python -m scripts.seed_api_key
+```
+
+This creates an active API key in the local SQLite database. Use the generated key in the `X-API-Key` request header when calling protected endpoints.
 
 ---
 
@@ -81,17 +96,18 @@ curl -X POST http://127.0.0.1:8000/api/analyze-url \
 
 ### EXAMPLE Response
 {
-  "event_id": 1,
-  "url": "https://example.com",
-  "domain": "example.com",
   "org_id": 1,
-  "verdict": "unknown",
-  "risk_category": "SUSPICIOUS",
-  "reasons": []
+  "risk_category": "SAFE",
+  "score": 0,
+  "explanations": [
+    "No suspicious patterns detected"
+  ],
+  "normalized_url": "https://example.com",
+  "host": "example.com"
 }
 
 🛣️ Roadmap
-	•	Risk scoring engine
+	•	Enhanced risk scoring & reputation enrichment
 	•	Domain reputation enrichment
 	•	Admin endpoints for API key management
 	•	Browser extension integration
@@ -101,4 +117,3 @@ curl -X POST http://127.0.0.1:8000/api/analyze-url \
 
 License 
 MIT (planned)
-
