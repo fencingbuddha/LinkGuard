@@ -1,0 +1,18 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:////app/data/linkguard.db
+    volumes:
+      # hot reload dev: mount backend code into container
+      - ./backend:/app
+      # persist sqlite db in a named volume (mounted to a directory)
+      - linkguard_db:/app/data
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  linkguard_db:
