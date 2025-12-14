@@ -32,4 +32,5 @@ class ScanEvent(Base):
 
     organization: Mapped["Organization"] = relationship(back_populates="scan_events")
 
+
 from app.models.organization import Organization  # noqa: F401

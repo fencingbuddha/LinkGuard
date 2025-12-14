@@ -14,3 +14,16 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 class Base(DeclarativeBase):
     """Base class for all ORM models."""
     pass
+
+from typing import Generator
+
+from sqlalchemy.orm import Session
+
+
+def get_db() -> Generator[Session, None, None]:
+    """FastAPI dependency that provides a DB session and ensures it is closed."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
