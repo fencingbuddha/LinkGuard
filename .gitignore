@@ -14,3 +14,64 @@ __pycache__/
 # Local SQLite DB
 backend/linkguard.db
 *.db
+
+# ------------------------------
+# Python
+# ------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.pyre/
+.ruff_cache/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# ------------------------------
+# Environments / secrets
+# ------------------------------
+.venv/
+.env
+.env.*
+!.env.example
+
+# ------------------------------
+# Logs
+# ------------------------------
+*.log
+
+# ------------------------------
+# OS / editor
+# ------------------------------
+.DS_Store
+.idea/
+.vscode/
+
+# ------------------------------
+# Local databases
+# ------------------------------
+backend/linkguard.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ------------------------------
+# Node / frontend (if added later)
+# ------------------------------
+node_modules/
+.next/
+out/
+dist/
+
+# ------------------------------
+# Misc
+# ------------------------------
+*.tmp
+*.swp
