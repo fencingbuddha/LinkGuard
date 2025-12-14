@@ -75,11 +75,13 @@ source .venv/bin/activate
 ```
 ### 2. Install dependencies
 
+```bash
 pip install -r requirements.txt
+```
 
 ### 3. Create environment file
 
-cp .env.exampe .env
+cp .env.example .env
 
 ### 4. Start the server
 
@@ -117,3 +119,30 @@ curl -X POST http://127.0.0.1:8000/api/analyze-url \
 
 License 
 MIT (planned)
+
+## 🐳 Running with Docker (Recommended)
+
+LinkGuard can be run locally using Docker Compose, which is the recommended setup for development.
+
+### Prerequisites
+- Docker Desktop (Mac/Windows/Linux)
+
+### Start the backend
+From the repository root:
+
+```bash
+docker compose up --build
+```
+
+The API will be available at:
+http://127.0.0.1:8000
+
+### Health check
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+### Notes
+- The SQLite database is persisted using a Docker volume.
+- Configuration is provided via environment variables (e.g. DATABASE_URL).
+- Hot reload is enabled for local development.
