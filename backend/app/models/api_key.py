@@ -25,7 +25,13 @@ class ApiKey(Base):
         String(128), nullable=False, unique=True, index=True
     )
     status: Mapped[ApiKeyStatus] = mapped_column(
-        Enum(ApiKeyStatus), default=ApiKeyStatus.ACTIVE, nullable=False
+        Enum(
+            ApiKeyStatus,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+            native_enum=False,
+        ),
+        default=ApiKeyStatus.ACTIVE,
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
