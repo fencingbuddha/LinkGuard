@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>LinkGuard Settings</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; padding: 16px; max-width: 720px; }
+      label { display: block; font-weight: 600; margin-top: 14px; }
+      input { width: 100%; padding: 10px; font-size: 14px; margin-top: 6px; }
+      .row { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+      button { padding: 10px 14px; font-size: 14px; cursor: pointer; }
+      .status { margin-left: 10px; font-size: 13px; }
+      .hint { color: #666; font-size: 12px; margin-top: 6px; }
+      code { background: #f3f3f3; padding: 2px 6px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <h1>LinkGuard Settings</h1>
+
+    <label for="backendUrl">Backend URL</label>
+    <input id="backendUrl" type="url" placeholder="http://localhost:8000" />
+    <div class="hint">Example: <code>http://localhost:8000</code> (no trailing slash preferred)</div>
+
+    <label for="apiKey">API Key</label>
+    <input id="apiKey" type="password" placeholder="Paste your org API key" />
+    <div class="hint">Stored locally in <code>chrome.storage.local</code>.</div>
+
+    <div class="row">
+      <button id="saveBtn">Save</button>
+      <button id="clearBtn" type="button">Clear</button>
+      <span id="status" class="status"></span>
+    </div>
+
+    <script src="options.js"></script>
+  </body>
+</html>
