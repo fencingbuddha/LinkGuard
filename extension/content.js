@@ -16,7 +16,45 @@ function normalizeDecisionKey(urlString) {
   }
 }
 
-async function getDecisionForUrl(urlString) {
+// --- Structured event logging (Issue #37) ---
+const LG_LOG = true;
+
+function lgFlowId() {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function lgDomain(urlString) {
+  try {
+    return new URL(urlString).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function lgLog(event, data = {}) {
+  if (!LG_LOG) return;
+  const payload = {
+    app: "linkguard",
+    v: 1,
+    ts: new Date().toISOString(),
+    scope: "content",
+    event,
+    ...data,
+  };
+  // Keep a consistent prefix for easy filtering.
+  console.log("[LinkGuard]", payload);
+}
+
+function lgError(reason, data = {}) {
+  if (!LG_LOG) return;
+  lgLog("error", { reason, ...data });
+}
+
+async function getDecisionForUrl(urlString, flowId) {
   const fallbackKey = normalizeDecisionKey(urlString);
   if (!fallbackKey) return { key: null, decision: null };
 
@@ -25,6 +63,7 @@ async function getDecisionForUrl(urlString) {
     const res = await chrome.runtime.sendMessage({
       type: "GET_DECISION",
       url: urlString,
+      flowId: flowId || null,
     });
 
     return {
@@ -36,10 +75,15 @@ async function getDecisionForUrl(urlString) {
   }
 }
 
-async function setDecisionForKey(key, decision) {
+async function setDecisionForKey(key, decision, flowId) {
   if (!key) return;
   try {
-    await chrome.runtime.sendMessage({ type: "SET_DECISION", key, decision });
+    await chrome.runtime.sendMessage({
+      type: "SET_DECISION",
+      key,
+      decision,
+      flowId: flowId || null,
+    });
   } catch {
     // ignore for MVP
   }
@@ -282,29 +326,58 @@ document.addEventListener(
     e.preventDefault();
     e.stopPropagation();
 
-    console.log("LinkGuard intercepted click:", url);
+    const flow_id = lgFlowId();
+    const domain = lgDomain(url) || undefined;
+
+    lgLog("click_intercepted", { flow_id, url, domain });
 
     // Decision memory (session-based): if user already chose allow/block for this domain,
     // respect it without prompting again.
-    const { key: decisionKey, decision } = await getDecisionForUrl(url);
+    const { key: decisionKey, decision } = await getDecisionForUrl(url, flow_id);
+
     if (decision === "ALLOW") {
-      console.log("LinkGuard decision memory: ALLOW", decisionKey);
+      lgLog("decision_applied", {
+        flow_id,
+        url,
+        domain,
+        decision: "ALLOW",
+        reason: "decision_memory",
+        key: decisionKey || undefined,
+      });
       window.location.assign(url);
       return;
     }
+
     if (decision === "BLOCK") {
-      console.log("LinkGuard decision memory: BLOCK", decisionKey);
+      lgLog("decision_applied", {
+        flow_id,
+        url,
+        domain,
+        decision: "BLOCK",
+        reason: "decision_memory",
+        key: decisionKey || undefined,
+      });
       // Stay on page; do not navigate.
       return;
     }
 
     try {
-      const res = await chrome.runtime.sendMessage({ type: "ANALYZE_URL", url });
+      lgLog("analyze_request", { flow_id, url, domain });
+      const res = await chrome.runtime.sendMessage({
+        type: "ANALYZE_URL",
+        url,
+        flowId: flow_id,
+      });
 
       // Background now returns: { ok: boolean, result?: {...}, error?: string, ... }
       if (!res?.ok) {
         // Treat failures as fail-open, but do not cache a decision.
-        console.warn("LinkGuard analysis failed; allowing navigation:", url, res);
+        lgError("analysis_failed_fail_open", {
+          flow_id,
+          url,
+          domain,
+          extra: { response: res },
+        });
         window.location.assign(url); // fail-open for MVP
         return;
       }
@@ -312,7 +385,12 @@ document.addEventListener(
       const result = res.result || {};
       const riskCategory = String(result.risk_category || "").toUpperCase();
 
-      console.log("LinkGuard analysis result:", { url, riskCategory, result });
+      lgLog("analysis_result", {
+        flow_id,
+        url,
+        domain,
+        risk_category: riskCategory || "UNKNOWN",
+      });
 
       const explanation = Array.isArray(result.explanations)
         ? result.explanations.join("\n")
@@ -323,30 +401,65 @@ document.addEventListener(
 
       if (policy.action === "ALLOW") {
         // SAFE/UNKNOWN: navigate immediately (fail-open for MVP)
+        lgLog("navigation", {
+          flow_id,
+          url,
+          domain,
+          decision: "ALLOW",
+          reason: policy.tier === "SAFE" ? "safe_allow" : "unknown_fail_open",
+        });
         window.location.assign(url);
         return;
       }
 
       // Overlay (MEDIUM/HIGH): show warning and let user choose
+      lgLog("overlay_shown", {
+        flow_id,
+        url,
+        domain,
+        risk_category: policy.displayRisk,
+      });
+
       showWarningOverlay({
         url,
         riskCategory: policy.displayRisk,
         explanation,
         onProceed: async () => {
+          lgLog("user_decision", {
+            flow_id,
+            url,
+            domain,
+            decision: "ALLOW",
+            reason: "user_override",
+            key: decisionKey || undefined,
+          });
           // Cache allow for this domain for the current browser session.
-          if (decisionKey) await setDecisionForKey(decisionKey, "ALLOW");
+          if (decisionKey) await setDecisionForKey(decisionKey, "ALLOW", flow_id);
           window.location.assign(url);
         },
         onCancel: async () => {
+          lgLog("user_decision", {
+            flow_id,
+            url,
+            domain,
+            decision: "BLOCK",
+            reason: "user_override",
+            key: decisionKey || undefined,
+          });
           // Cache block for this domain for the current browser session.
-          if (decisionKey) await setDecisionForKey(decisionKey, "BLOCK");
+          if (decisionKey) await setDecisionForKey(decisionKey, "BLOCK", flow_id);
           // stay on the current page; overlay is removed in the helper
         },
       });
       return;
     } catch (err) {
       // Fail-open for now (don’t break the web)
-      console.warn("LinkGuard error; allowing navigation:", err);
+      lgError("exception_fail_open", {
+        flow_id,
+        url,
+        domain,
+        extra: { message: String(err?.message || err) },
+      });
       window.location.assign(url);
     }
   },
