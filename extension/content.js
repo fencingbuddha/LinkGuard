@@ -6,6 +6,194 @@ function isModifiedClick(e) {
   return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
 }
 
+function showWarningOverlay({ url, riskCategory, explanation, onProceed, onCancel }) {
+  const existing = document.getElementById("linkguard-warning-overlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "linkguard-warning-overlay";
+  overlay.style.position = "fixed";
+  overlay.style.top = "0";
+  overlay.style.left = "0";
+  overlay.style.width = "100vw";
+  overlay.style.height = "100vh";
+  // Darker backdrop for readability
+  overlay.style.background = "rgba(0, 0, 0, 1.0)";
+  overlay.style.zIndex = "2147483647";
+  overlay.style.display = "flex";
+  overlay.style.alignItems = "center";
+  overlay.style.justifyContent = "center";
+  overlay.style.padding = "24px";
+
+  const card = document.createElement("div");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.style.background = "#1f1f1f";
+  card.style.color = "#fff";
+  card.style.padding = "24px";
+  card.style.borderRadius = "12px";
+  card.style.maxWidth = "640px";
+  card.style.width = "100%";
+  card.style.fontFamily =
+    "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  card.style.boxShadow = "0 18px 60px rgba(0,0,0,0.7)";
+  card.style.backdropFilter = "blur(7px)";
+  card.style.border = "1px solid rgba(255,255,255,0.12)";
+
+  const header = document.createElement("div");
+  header.style.display = "flex";
+  header.style.alignItems = "center";
+  header.style.justifyContent = "space-between";
+  header.style.gap = "12px";
+
+  const titleWrap = document.createElement("div");
+
+  const title = document.createElement("h2");
+  title.textContent =
+    riskCategory === "DANGEROUS" ? "This link may be dangerous" : "This link looks suspicious";
+  title.style.margin = "0";
+  title.style.fontSize = "28px";
+  title.style.lineHeight = "1.2";
+
+  const badge = document.createElement("div");
+  badge.textContent = riskCategory;
+  badge.style.padding = "6px 10px";
+  badge.style.borderRadius = "999px";
+  badge.style.fontSize = "12px";
+  badge.style.fontWeight = "700";
+  badge.style.letterSpacing = "0.08em";
+  badge.style.border = "1px solid rgba(255,255,255,0.18)";
+  badge.style.background =
+    riskCategory === "DANGEROUS" ? "rgba(192, 57, 43, 0.28)" : "rgba(241, 196, 15, 0.22)";
+
+  titleWrap.appendChild(title);
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.textContent = "×";
+  closeBtn.setAttribute("aria-label", "Close warning");
+  closeBtn.style.background = "transparent";
+  closeBtn.style.border = "1px solid rgba(255,255,255,0.18)";
+  closeBtn.style.color = "#fff";
+  closeBtn.style.width = "40px";
+  closeBtn.style.height = "40px";
+  closeBtn.style.borderRadius = "10px";
+  closeBtn.style.cursor = "pointer";
+  closeBtn.style.fontSize = "22px";
+  closeBtn.style.lineHeight = "1";
+
+  header.appendChild(titleWrap);
+  header.appendChild(badge);
+  header.appendChild(closeBtn);
+
+  const urlLabel = document.createElement("div");
+  urlLabel.textContent = "Destination";
+  urlLabel.style.marginTop = "18px";
+  urlLabel.style.marginBottom = "8px";
+  urlLabel.style.fontSize = "13px";
+  urlLabel.style.opacity = "0.85";
+
+  const urlEl = document.createElement("pre");
+  urlEl.textContent = url;
+  urlEl.style.whiteSpace = "pre-wrap";
+  urlEl.style.wordBreak = "break-all";
+  urlEl.style.background = "#0f0f0f";
+  urlEl.style.padding = "14px";
+  urlEl.style.borderRadius = "10px";
+  urlEl.style.border = "1px solid rgba(255,255,255,0.12)";
+  urlEl.style.margin = "0";
+  urlEl.style.fontSize = "14px";
+
+  const explanationEl = document.createElement("p");
+  explanationEl.textContent = explanation || "No additional details provided.";
+  explanationEl.style.marginTop = "14px";
+  explanationEl.style.marginBottom = "0";
+  explanationEl.style.opacity = "0.92";
+
+  const actions = document.createElement("div");
+  actions.style.display = "flex";
+  actions.style.justifyContent = "flex-end";
+  actions.style.gap = "12px";
+  actions.style.marginTop = "20px";
+
+  const baseBtn = (btn) => {
+    btn.type = "button";
+    btn.style.padding = "10px 14px";
+    btn.style.borderRadius = "10px";
+    btn.style.cursor = "pointer";
+    btn.style.fontWeight = "600";
+    btn.style.border = "1px solid rgba(255,255,255,0.18)";
+    btn.style.background = "#2a2a2a";
+    btn.style.color = "#fff";
+  };
+
+  const backBtn = document.createElement("button");
+  backBtn.textContent = "Go Back";
+  baseBtn(backBtn);
+
+  const proceedBtn = document.createElement("button");
+  proceedBtn.textContent = "Proceed Anyway";
+  baseBtn(proceedBtn);
+  proceedBtn.style.background = riskCategory === "DANGEROUS" ? "#c0392b" : "#b9770e";
+  proceedBtn.style.border = "none";
+
+  // Close helpers
+  const cleanupAndCancel = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKeyDown, true);
+    onCancel && onCancel();
+  };
+
+  const cleanupAndProceed = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKeyDown, true);
+    onProceed && onProceed();
+  };
+
+  const onKeyDown = (ev) => {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      cleanupAndCancel();
+    }
+  };
+
+  closeBtn.onclick = cleanupAndCancel;
+  backBtn.onclick = cleanupAndCancel;
+  proceedBtn.onclick = cleanupAndProceed;
+
+  // Click outside the card cancels
+  overlay.addEventListener("click", (ev) => {
+    if (ev.target === overlay) cleanupAndCancel();
+  });
+
+  // Prevent click-through inside the card
+  card.addEventListener("click", (ev) => ev.stopPropagation());
+
+  actions.appendChild(backBtn);
+  actions.appendChild(proceedBtn);
+
+  card.appendChild(header);
+  card.appendChild(urlLabel);
+  card.appendChild(urlEl);
+  card.appendChild(explanationEl);
+  card.appendChild(actions);
+
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  // Enable ESC to close
+  document.addEventListener("keydown", onKeyDown, true);
+
+  // Focus for accessibility / keyboard
+  setTimeout(() => {
+    try {
+      proceedBtn.focus();
+    } catch {
+      // ignore
+    }
+  }, 0);
+}
+
 document.addEventListener(
   "click",
   async (e) => {
@@ -49,18 +237,37 @@ document.addEventListener(
 
       console.log("LinkGuard analysis result:", { url, riskCategory, result });
 
-      // MVP policy: block only HIGH; allow everything else.
-      if (riskCategory === "HIGH") {
-        const explanation = Array.isArray(result.explanations)
-          ? result.explanations.join("\n")
-          : result.explanation || "(no details)";
+      const explanation = Array.isArray(result.explanations)
+        ? result.explanations.join("\n")
+        : result.explanation || "(no details)";
 
-        alert(
-          `LinkGuard blocked a high-risk link:\n\n${url}\n\nReason:\n${explanation}`
-        );
+      // Sprint 2 overlay behavior:
+      // - SAFE: navigate immediately
+      // - SUSPICIOUS/DANGEROUS: show overlay with Go Back / Proceed Anyway
+      // - HIGH: treat as DANGEROUS for now (overlay blocks until user proceeds)
+      if (riskCategory === "SAFE") {
+        window.location.assign(url);
         return;
       }
 
+      if (
+        riskCategory === "SUSPICIOUS" ||
+        riskCategory === "DANGEROUS" ||
+        riskCategory === "HIGH"
+      ) {
+        showWarningOverlay({
+          url,
+          riskCategory: riskCategory === "HIGH" ? "DANGEROUS" : riskCategory,
+          explanation,
+          onProceed: () => window.location.assign(url),
+          onCancel: () => {
+            // stay on the current page; overlay is removed in the helper
+          },
+        });
+        return;
+      }
+
+      // Default: fail-open for unknown categories
       window.location.assign(url);
     } catch (err) {
       // Fail-open for now (don’t break the web)
