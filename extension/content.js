@@ -6,6 +6,45 @@ function isModifiedClick(e) {
   return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
 }
 
+function normalizeDecisionKey(urlString) {
+  try {
+    const u = new URL(urlString);
+    // Hostname is stable and good enough for MVP decision memory.
+    return (u.hostname || "").toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+async function getDecisionForUrl(urlString) {
+  const fallbackKey = normalizeDecisionKey(urlString);
+  if (!fallbackKey) return { key: null, decision: null };
+
+  try {
+    // Background expects { type: "GET_DECISION", url }
+    const res = await chrome.runtime.sendMessage({
+      type: "GET_DECISION",
+      url: urlString,
+    });
+
+    return {
+      key: res?.key || fallbackKey,
+      decision: res?.decision ?? null,
+    };
+  } catch {
+    return { key: fallbackKey, decision: null };
+  }
+}
+
+async function setDecisionForKey(key, decision) {
+  if (!key) return;
+  try {
+    await chrome.runtime.sendMessage({ type: "SET_DECISION", key, decision });
+  } catch {
+    // ignore for MVP
+  }
+}
+
 function showWarningOverlay({ url, riskCategory, explanation, onProceed, onCancel }) {
   const existing = document.getElementById("linkguard-warning-overlay");
   if (existing) existing.remove();
@@ -18,7 +57,7 @@ function showWarningOverlay({ url, riskCategory, explanation, onProceed, onCance
   overlay.style.width = "100vw";
   overlay.style.height = "100vh";
   // Darker backdrop for readability
-  overlay.style.background = "rgba(0, 0, 0, 1.0)";
+  overlay.style.background = "rgba(0, 0, 0, 0.72)";
   overlay.style.zIndex = "2147483647";
   overlay.style.display = "flex";
   overlay.style.alignItems = "center";
@@ -222,11 +261,26 @@ document.addEventListener(
 
     console.log("LinkGuard intercepted click:", url);
 
+    // Decision memory (session-based): if user already chose allow/block for this domain,
+    // respect it without prompting again.
+    const { key: decisionKey, decision } = await getDecisionForUrl(url);
+    if (decision === "ALLOW") {
+      console.log("LinkGuard decision memory: ALLOW", decisionKey);
+      window.location.assign(url);
+      return;
+    }
+    if (decision === "BLOCK") {
+      console.log("LinkGuard decision memory: BLOCK", decisionKey);
+      // Stay on page; do not navigate.
+      return;
+    }
+
     try {
       const res = await chrome.runtime.sendMessage({ type: "ANALYZE_URL", url });
 
       // Background now returns: { ok: boolean, result?: {...}, error?: string, ... }
       if (!res?.ok) {
+        // Treat failures as fail-open, but do not cache a decision.
         console.warn("LinkGuard analysis failed; allowing navigation:", url, res);
         window.location.assign(url); // fail-open for MVP
         return;
@@ -259,8 +313,14 @@ document.addEventListener(
           url,
           riskCategory: riskCategory === "HIGH" ? "DANGEROUS" : riskCategory,
           explanation,
-          onProceed: () => window.location.assign(url),
-          onCancel: () => {
+          onProceed: async () => {
+            // Cache allow for this domain for the current browser session.
+            if (decisionKey) await setDecisionForKey(decisionKey, "ALLOW");
+            window.location.assign(url);
+          },
+          onCancel: async () => {
+            // Cache block for this domain for the current browser session.
+            if (decisionKey) await setDecisionForKey(decisionKey, "BLOCK");
             // stay on the current page; overlay is removed in the helper
           },
         });
