@@ -10,6 +10,38 @@ function _trimTrailingSlashes(s) {
   return (s || "").replace(/\/+$/, "");
 }
 
+// --- Structured event logging ---
+// Background-side logs use a consistent event shape so they can be correlated with content.js.
+// If content.js provides a `flowId`, we propagate it through logs + responses.
+
+function _nowIso() {
+  return new Date().toISOString();
+}
+
+function _safeDomainFromUrl(inputUrl) {
+  try {
+    return new URL(inputUrl).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function logEvent(event, details = {}) {
+  const payload = {
+    app: "linkguard",
+    layer: "background",
+    event,
+    ts: _nowIso(),
+    ...details,
+  };
+
+  // Use console methods by severity, but always keep the same payload shape.
+  const level = details?.level || "log";
+  if (level === "warn") console.warn(payload);
+  else if (level === "error") console.error(payload);
+  else console.log(payload);
+}
+
 // --- Decision memory (session-based) ---
 // Stores user decisions per normalized hostname for the current browser session.
 // MV3 supports chrome.storage.session; we fall back to an in-memory Map if unavailable.
@@ -59,7 +91,7 @@ async function setDecisionForKey(key, decision) {
   return { ok: true };
 }
 
-async function analyzeUrlViaBackend(url) {
+async function analyzeUrlViaBackend(url, flowId) {
   const { backendUrl, apiKey } = await getConfig();
 
   if (!backendUrl) {
@@ -80,9 +112,14 @@ async function analyzeUrlViaBackend(url) {
 
   const endpoint = `${_trimTrailingSlashes(backendUrl)}/api/analyze-url`;
 
-  try {
-    console.log("[LinkGuard] Request ->", endpoint, { url });
+  logEvent("analyze_request", {
+    flow_id: flowId || null,
+    url,
+    domain: _safeDomainFromUrl(url),
+    endpoint,
+  });
 
+  try {
     const res = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -101,7 +138,18 @@ async function analyzeUrlViaBackend(url) {
     }
 
     if (!res.ok) {
-      console.warn("[LinkGuard] Error <-", res.status, data ?? text);
+      logEvent("analysis_error", {
+        level: "warn",
+        flow_id: flowId || null,
+        url,
+        domain: _safeDomainFromUrl(url),
+        status: res.status,
+        error: "HTTP_ERROR",
+        message:
+          (data && (data.detail || data.message)) ||
+          `Backend returned ${res.status}`,
+        raw: data ?? text,
+      });
       return {
         ok: false,
         error: "HTTP_ERROR",
@@ -113,10 +161,24 @@ async function analyzeUrlViaBackend(url) {
       };
     }
 
-    console.log("[LinkGuard] Response <-", data);
+    logEvent("analysis_result", {
+      flow_id: flowId || null,
+      url,
+      domain: _safeDomainFromUrl(url),
+      risk_category: data?.risk_category ?? null,
+      score: data?.score ?? null,
+      result: data,
+    });
     return { ok: true, result: data };
   } catch (err) {
-    console.error("[LinkGuard] Network error", err);
+    logEvent("analysis_error", {
+      level: "error",
+      flow_id: flowId || null,
+      url,
+      domain: _safeDomainFromUrl(url),
+      error: "NETWORK_ERROR",
+      message: String(err),
+    });
     return {
       ok: false,
       error: "NETWORK_ERROR",
@@ -127,17 +189,25 @@ async function analyzeUrlViaBackend(url) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "PING") {
+    logEvent("ping", { flow_id: message?.flowId || null, from_tab: sender?.tab?.url || null });
     sendResponse({ ok: true, from: "background", ts: Date.now() });
     return true;
   }
 
   if (message?.type === "GET_CONFIG") {
+    logEvent("get_config", { flow_id: message?.flowId || null });
     getConfig().then((cfg) => sendResponse({ ok: true, cfg }));
     return true; // async response
   }
 
   if (message?.type === "GET_DECISION") {
     const url = message?.url;
+
+    logEvent("decision_lookup", {
+      flow_id: message?.flowId || null,
+      url,
+      domain: _safeDomainFromUrl(url),
+    });
 
     getDecisionForUrl(url).then(({ key, decision }) => {
       sendResponse({ ok: true, key, decision });
@@ -150,6 +220,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const key = message?.key;
     const decision = message?.decision; // expected: "ALLOW" | "BLOCK"
 
+    logEvent("decision_set", {
+      flow_id: message?.flowId || null,
+      key: (key || "").toLowerCase().trim(),
+      decision: decision || null,
+    });
+
     setDecisionForKey(key, decision).then((r) => {
       sendResponse({ ok: true, ...r });
     });
@@ -159,19 +235,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "ANALYZE_URL") {
     const url = message?.url;
+    const flowId = message?.flowId || null;
 
-    // Defensive logging for traceability.
-    console.log(
-      "[LinkGuard] ANALYZE_URL received:",
+    logEvent("analyze_received", {
+      flow_id: flowId,
       url,
-      "from tab:",
-      sender?.tab?.url
-    );
+      domain: _safeDomainFromUrl(url),
+      from_tab: sender?.tab?.url || null,
+    });
 
-    analyzeUrlViaBackend(url).then((payload) => sendResponse(payload));
+    analyzeUrlViaBackend(url, flowId).then((payload) => sendResponse({ ...payload, flowId }));
     return true; // async response
   }
 
   // Unknown message type: ignore.
+  if (message?.type) {
+    logEvent("unknown_message", { level: "warn", type: message.type });
+  }
   return false;
 });
