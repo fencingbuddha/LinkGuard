@@ -45,6 +45,29 @@ async function setDecisionForKey(key, decision) {
   }
 }
 
+function getUxPolicyForRisk(riskCategoryRaw) {
+  const risk = String(riskCategoryRaw || "").toUpperCase();
+
+  // UX tiers: SAFE / LOW / MEDIUM / HIGH
+  // Backend currently uses: SAFE / SUSPICIOUS / DANGEROUS / HIGH (and may expand later).
+  if (risk === "SAFE") {
+    return { tier: "SAFE", action: "ALLOW", displayRisk: "SAFE" };
+  }
+
+  // Treat SUSPICIOUS as MEDIUM for MVP: show overlay with proceed/cancel.
+  if (risk === "SUSPICIOUS") {
+    return { tier: "MEDIUM", action: "OVERLAY", displayRisk: "SUSPICIOUS" };
+  }
+
+  // Treat DANGEROUS/HIGH as HIGH for MVP: show overlay labeled DANGEROUS.
+  if (risk === "DANGEROUS" || risk === "HIGH") {
+    return { tier: "HIGH", action: "OVERLAY", displayRisk: "DANGEROUS" };
+  }
+
+  // Unknown category: fail-open for MVP.
+  return { tier: "UNKNOWN", action: "ALLOW", displayRisk: "SAFE" };
+}
+
 function showWarningOverlay({ url, riskCategory, explanation, onProceed, onCancel }) {
   const existing = document.getElementById("linkguard-warning-overlay");
   if (existing) existing.remove();
@@ -295,40 +318,32 @@ document.addEventListener(
         ? result.explanations.join("\n")
         : result.explanation || "(no details)";
 
-      // Sprint 2 overlay behavior:
-      // - SAFE: navigate immediately
-      // - SUSPICIOUS/DANGEROUS: show overlay with Go Back / Proceed Anyway
-      // - HIGH: treat as DANGEROUS for now (overlay blocks until user proceeds)
-      if (riskCategory === "SAFE") {
+      // Centralized Risk → UX policy mapping
+      const policy = getUxPolicyForRisk(riskCategory);
+
+      if (policy.action === "ALLOW") {
+        // SAFE/UNKNOWN: navigate immediately (fail-open for MVP)
         window.location.assign(url);
         return;
       }
 
-      if (
-        riskCategory === "SUSPICIOUS" ||
-        riskCategory === "DANGEROUS" ||
-        riskCategory === "HIGH"
-      ) {
-        showWarningOverlay({
-          url,
-          riskCategory: riskCategory === "HIGH" ? "DANGEROUS" : riskCategory,
-          explanation,
-          onProceed: async () => {
-            // Cache allow for this domain for the current browser session.
-            if (decisionKey) await setDecisionForKey(decisionKey, "ALLOW");
-            window.location.assign(url);
-          },
-          onCancel: async () => {
-            // Cache block for this domain for the current browser session.
-            if (decisionKey) await setDecisionForKey(decisionKey, "BLOCK");
-            // stay on the current page; overlay is removed in the helper
-          },
-        });
-        return;
-      }
-
-      // Default: fail-open for unknown categories
-      window.location.assign(url);
+      // Overlay (MEDIUM/HIGH): show warning and let user choose
+      showWarningOverlay({
+        url,
+        riskCategory: policy.displayRisk,
+        explanation,
+        onProceed: async () => {
+          // Cache allow for this domain for the current browser session.
+          if (decisionKey) await setDecisionForKey(decisionKey, "ALLOW");
+          window.location.assign(url);
+        },
+        onCancel: async () => {
+          // Cache block for this domain for the current browser session.
+          if (decisionKey) await setDecisionForKey(decisionKey, "BLOCK");
+          // stay on the current page; overlay is removed in the helper
+        },
+      });
+      return;
     } catch (err) {
       // Fail-open for now (don’t break the web)
       console.warn("LinkGuard error; allowing navigation:", err);
