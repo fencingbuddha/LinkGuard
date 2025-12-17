@@ -1,45 +1,56 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from datetime import datetime
-import enum
+from enum import Enum
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String
+# Enum for logical API key status
+class ApiKeyStatus(str, Enum):
+    """Logical status used by tests / API responses.
+
+    The DB currently uses `is_active` / `revoked_at`; this enum provides a stable
+    name for callers (and CI tests) that import `ApiKeyStatus`.
+    """
+
+    ACTIVE = "active"
+    REVOKED = "revoked"
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-
-
-class ApiKeyStatus(str, enum.Enum):
-    ACTIVE = "active"
-    REVOKED = "revoked"
 
 
 class ApiKey(Base):
     __tablename__ = "api_keys"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+
     org_id: Mapped[int] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    key: Mapped[str] = mapped_column(
-        String(128), nullable=False, unique=True, index=True
-    )
-    status: Mapped[ApiKeyStatus] = mapped_column(
-        Enum(
-            ApiKeyStatus,
-            values_callable=lambda enum_cls: [e.value for e in enum_cls],
-            native_enum=False,
-        ),
-        default=ApiKeyStatus.ACTIVE,
-        nullable=False,
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
-    )
+
+    # Store ONLY a hash of the API key (never the plaintext key).
+    # If you use sha256 hex, this is 64 chars.
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+
+    # Optional convenience field for admin display/debugging (not sensitive).
+    # Example: first 8 chars of the raw key.
+    key_prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+
+    # Soft revoke
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    @property
+    def status(self) -> ApiKeyStatus:
+        return ApiKeyStatus.REVOKED if self.revoked_at else ApiKeyStatus.ACTIVE
 
     organization: Mapped["Organization"] = relationship(back_populates="api_keys")
 

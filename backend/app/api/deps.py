@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.auth.security import decode_access_token
 from app.models.admin_user import AdminUser
-from app.models.api_key import ApiKey, ApiKeyStatus
+from app.models.api_key import ApiKey
+
+import hashlib
+import os
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,14 @@ class AdminContext:
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+_API_KEY_PEPPER = os.getenv("API_KEY_PEPPER", "dev-pepper-change-me")
+
+
+def _hash_api_key(raw_key: str) -> str:
+    data = (_API_KEY_PEPPER + raw_key).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
 def require_api_key(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     db: Session = Depends(get_db),
@@ -37,13 +48,16 @@ def require_api_key(
             detail="Missing API key",
         )
 
+    raw = x_api_key.strip()
+    api_key_hash = _hash_api_key(raw)
+
     api_key = (
         db.query(ApiKey)
-        .filter(ApiKey.key == x_api_key.strip())
+        .filter(ApiKey.key_hash == api_key_hash)
         .first()
     )
 
-    if not api_key or api_key.status != ApiKeyStatus.ACTIVE:
+    if not api_key or not api_key.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",
@@ -63,8 +77,9 @@ def require_admin(
             detail="Missing bearer token",
         )
 
-    payload = decode_access_token(creds.credentials)
-    if not payload:
+    try:
+        payload = decode_access_token(creds.credentials)
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
