@@ -57,11 +57,35 @@ def require_api_key(
         .first()
     )
 
-    if not api_key or not api_key.is_active:
+    if not api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",
         )
+
+    # Support both the newer schema (is_active/revoked_at) and older schema (status).
+    is_active = getattr(api_key, "is_active", None)
+    revoked_at = getattr(api_key, "revoked_at", None)
+    status_val = getattr(api_key, "status", None)
+
+    if is_active is False:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+        )
+
+    if revoked_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+        )
+
+    if isinstance(status_val, str) and status_val.strip():
+        if status_val.strip().upper() != "ACTIVE":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid API key",
+            )
 
     return OrgContext(org_id=api_key.org_id, api_key_id=api_key.id)
 
