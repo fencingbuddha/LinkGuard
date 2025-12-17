@@ -26,15 +26,6 @@ class OrgCreateIn(BaseModel):
     name: str
 
 
-@router.get("/orgs", response_model=list[OrgOut])
-def list_orgs(
-    _: AdminContext = Depends(require_admin),
-    db: Session = Depends(get_db),
-) -> list[Organization]:
-    return db.query(Organization).order_by(Organization.id.asc()).all()
-
-
-@router.post("/orgs", response_model=OrgOut, status_code=status.HTTP_201_CREATED)
 class ApiKeyCreateOut(BaseModel):
     id: int
     org_id: int
@@ -47,9 +38,19 @@ class ApiKeyRevokeOut(BaseModel):
     revoked: bool
 
 
+@router.get("/orgs", response_model=list[OrgOut])
+def list_orgs(
+    _: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> list[Organization]:
+    return db.query(Organization).order_by(Organization.id.asc()).all()
+
+
 def _generate_raw_api_key() -> str:
     return secrets.token_urlsafe(32)
 
+
+@router.post("/orgs", response_model=OrgOut, status_code=status.HTTP_201_CREATED)
 def create_org(
     payload: OrgCreateIn,
     _: AdminContext = Depends(require_admin),
@@ -68,6 +69,7 @@ def create_org(
     db.commit()
     db.refresh(org)
     return org
+
 
 @router.post("/orgs/{org_id}/keys", response_model=ApiKeyCreateOut, status_code=status.HTTP_201_CREATED)
 def create_org_key(

@@ -81,3 +81,22 @@ def test_analyze_url_valid_api_key():
     assert "risk_category" in body
     assert "score" in body
     assert "explanations" in body
+
+
+def test_analyze_url_ignores_client_supplied_org_id():
+    """Client must not be able to override tenant context.
+
+    Even if a request includes an `org_id`, the backend should derive org_id
+    from the API key (OrgContext), not from user input.
+    """
+    _ensure_test_api_key()
+
+    r = client.post(
+        "/api/analyze-url",
+        headers={"X-API-Key": TEST_API_KEY},
+        json={"url": "https://example.com", "org_id": TEST_ORG_ID + 999},
+    )
+    assert r.status_code == 200
+    body = r.json()
+
+    assert body["org_id"] == TEST_ORG_ID

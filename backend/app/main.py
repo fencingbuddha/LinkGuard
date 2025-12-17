@@ -1,16 +1,19 @@
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
 
 from app.api.analyze import router as analyze_router
 from app.api.admin import router as admin_router
 from app.api.admin_orgs import router as admin_orgs_router
 from app.init_db import init_db
 
-app = FastAPI()
 
-
-@app.on_event("startup")
-def _startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     init_db()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 app.include_router(analyze_router)
