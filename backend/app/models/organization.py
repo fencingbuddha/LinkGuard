@@ -1,5 +1,6 @@
+from __future__ import annotations
 from datetime import datetime
-from typing import List
+from typing import TYPE_CHECKING, List
 
 from sqlalchemy import DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -23,5 +24,7 @@ class Organization(Base):
         back_populates="organization", cascade="all, delete-orphan"
     )
 
-from app.models.api_key import ApiKey  # type: ignore  # circular import safe at runtime
-from app.models.scan_event import ScanEvent  # type: ignore
+
+if TYPE_CHECKING:
+    from app.models.api_key import ApiKey
+    from app.models.scan_event import ScanEvent
