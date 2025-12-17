@@ -2,8 +2,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 import os
+from pathlib import Path
 
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./linkguard.db")
+# Make the default SQLite DB location deterministic (relative to the backend folder),
+# so running from different working directories doesn't create multiple DB files.
+_backend_dir = Path(__file__).resolve().parents[1]  # .../backend/app -> .../backend
+_default_sqlite_path = _backend_dir / "linkguard.db"
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{_default_sqlite_path}")
 
 # For SQLite in a single-process FastAPI app, this flag is fine.
 connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
