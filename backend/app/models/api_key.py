@@ -3,6 +3,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from datetime import datetime
+from enum import Enum
+
+# Enum for logical API key status
+class ApiKeyStatus(str, Enum):
+    """Logical status used by tests / API responses.
+
+    The DB currently uses `is_active` / `revoked_at`; this enum provides a stable
+    name for callers (and CI tests) that import `ApiKeyStatus`.
+    """
+
+    ACTIVE = "active"
+    REVOKED = "revoked"
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -35,6 +47,10 @@ class ApiKey(Base):
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    @property
+    def status(self) -> ApiKeyStatus:
+        return ApiKeyStatus.REVOKED if self.revoked_at else ApiKeyStatus.ACTIVE
 
     organization: Mapped["Organization"] = relationship(back_populates="api_keys")
 
