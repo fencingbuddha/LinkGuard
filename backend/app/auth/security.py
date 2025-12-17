@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import os
@@ -30,14 +28,7 @@ JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))  # 8 hours defa
 
 
 def create_access_token(*, sub: str, extra: Optional[Dict[str, Any]] = None) -> str:
-    """Create a signed JWT access token.
-
-    Payload includes:
-    - sub: subject identifier (admin user id)
-    - iat: issued-at (unix seconds)
-    - exp: expiry (unix seconds)
-    - type: token type ("admin")
-    """
+    """Create a signed JWT access token."""
     now = datetime.now(timezone.utc)
     exp = now + timedelta(minutes=JWT_EXPIRE_MINUTES)
 
@@ -54,8 +45,5 @@ def create_access_token(*, sub: str, extra: Optional[Dict[str, Any]] = None) -> 
 
 
 def decode_access_token(token: str) -> Dict[str, Any]:
-    """Decode and validate an access token.
-
-    Raises jwt exceptions if invalid/expired.
-    """
+    """Decode and validate an access token. Raises jwt exceptions if invalid/expired."""
     return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])

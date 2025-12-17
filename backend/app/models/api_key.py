@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from datetime import datetime
 import enum
 
@@ -38,5 +42,7 @@ class ApiKey(Base):
     )
 
     organization: Mapped["Organization"] = relationship(back_populates="api_keys")
-    
-    from app.models.organization import Organization  # noqa: F401
+
+
+if TYPE_CHECKING:
+    from app.models.organization import Organization
