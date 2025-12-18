@@ -35,8 +35,23 @@ Scope is intentionally limited to local development and early production readine
 
 ---
 
+## Rate Limiting (MVP)
+- [x] `/api/analyze-url` protected by fixed-window rate limiter
+- [x] Enforced per API key
+- [x] Returns `429 Too Many Requests` with `Retry-After` header
+- [x] Configurable via environment variables:
+  - `RATE_LIMIT_MAX`
+  - `RATE_LIMIT_WINDOW_S`
+
+**Limitations:**
+- In-memory only (per-process)
+- Suitable for MVP / local dev
+- Production deployments should use shared state (e.g., Redis)
+
+---
+
 ## Known Gaps / Future Hardening
-- Rate limiting on analyze endpoint
+- [x] Rate limiting on analyze endpoint (in-memory, per API key)
 - API key rotation and expiration
 - Audit logging for admin actions
 - Production secret management (Vault / cloud secrets)
