@@ -2,10 +2,45 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from urllib.parse import parse_qs, urlparse
 
+from app.db import SessionLocal
+from app.models.scan_event import RiskCategory, ScanEvent
+
 from app.api.deps import OrgContext, require_api_key
 from app.services.url_analysis import analyze_url as analyze_url_service
 
 router = APIRouter()
+
+
+def _record_scan_event(*, org_id: int, normalized_url: str, risk_category: str) -> None:
+    """Best-effort persistence of ScanEvent for admin analytics.
+
+    This should never break the analyze endpoint; failures are swallowed.
+    """
+    try:
+        host = urlparse(normalized_url or "").netloc or ""
+        # Strip port if present (e.g., example.com:443)
+        domain = host.split(":", 1)[0] if host else "unknown"
+
+        # Normalize to enum
+        rc = (risk_category or "").upper()
+        if rc not in {"SAFE", "SUSPICIOUS", "DANGEROUS"}:
+            rc = "SUSPICIOUS"  # conservative default
+
+        s = SessionLocal()
+        try:
+            s.add(
+                ScanEvent(
+                    org_id=org_id,
+                    domain=domain,
+                    risk_category=RiskCategory(rc),
+                )
+            )
+            s.commit()
+        finally:
+            s.close()
+    except Exception:
+        # Intentionally ignore to keep /api/analyze-url reliable.
+        return
 
 
 class AnalyzeUrlIn(BaseModel):
@@ -35,6 +70,7 @@ def analyze_url_endpoint(payload: AnalyzeUrlIn, ctx: OrgContext = Depends(requir
             "explanations": ["Forced DANGEROUS via linkguard_test (dev hook)."],
             "normalized_url": url,
         }
+        _record_scan_event(org_id=ctx.org_id, normalized_url=result.get("normalized_url", url), risk_category=result.get("risk_category", ""))
         return {"org_id": ctx.org_id, **result}
 
     if test_flag in {"suspicious", "sus"}:
@@ -44,8 +80,10 @@ def analyze_url_endpoint(payload: AnalyzeUrlIn, ctx: OrgContext = Depends(requir
             "explanations": ["Forced SUSPICIOUS via linkguard_test (dev hook)."],
             "normalized_url": url,
         }
+        _record_scan_event(org_id=ctx.org_id, normalized_url=result.get("normalized_url", url), risk_category=result.get("risk_category", ""))
         return {"org_id": ctx.org_id, **result}
 
     result = analyze_url_service(url)
+    _record_scan_event(org_id=ctx.org_id, normalized_url=result.get("normalized_url", url), risk_category=result.get("risk_category", ""))
 
     return {"org_id": ctx.org_id, **result}
