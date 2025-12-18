@@ -100,3 +100,68 @@ def test_analyze_url_ignores_client_supplied_org_id():
     body = r.json()
 
     assert body["org_id"] == TEST_ORG_ID
+
+
+# ---------------------------
+# Rate limiting (MVP) tests
+# ---------------------------
+
+from app.api import deps as deps_mod
+
+
+def _set_rate_limit(max_requests: int, window_s: int) -> None:
+    # RATE_LIMIT_* are module-level values in deps.py
+    deps_mod.RATE_LIMIT_MAX = max_requests
+    deps_mod.RATE_LIMIT_WINDOW_S = window_s
+
+
+def _clear_rate_buckets() -> None:
+    # In-memory limiter state; clear between tests to avoid flakiness.
+    deps_mod._RATE_BUCKETS.clear()
+
+
+def test_analyze_url_rate_limited_returns_429_and_retry_after():
+    _ensure_test_api_key()
+    _clear_rate_buckets()
+    _set_rate_limit(max_requests=2, window_s=60)
+
+    h = {"X-API-Key": TEST_API_KEY}
+
+    r1 = client.post("/api/analyze-url", headers=h, json={"url": "https://example.com"})
+    r2 = client.post("/api/analyze-url", headers=h, json={"url": "https://example.com"})
+    r3 = client.post("/api/analyze-url", headers=h, json={"url": "https://example.com"})
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert r3.status_code == 429
+    assert r3.json()["detail"] == "Rate limit exceeded"
+
+    # FastAPI/Starlette lowercases headers in responses
+    assert "retry-after" in {k.lower(): v for k, v in r3.headers.items()}
+
+
+def test_analyze_url_rate_limit_resets_after_window(monkeypatch):
+    _ensure_test_api_key()
+    _clear_rate_buckets()
+    _set_rate_limit(max_requests=1, window_s=10)
+
+    # Control time.time() used by deps.py
+    t = {"now": 1000.0}
+
+    def fake_time() -> float:
+        return t["now"]
+
+    monkeypatch.setattr(deps_mod.time, "time", fake_time)
+
+    h = {"X-API-Key": TEST_API_KEY}
+
+    r1 = client.post("/api/analyze-url", headers=h, json={"url": "https://example.com"})
+    assert r1.status_code == 200
+
+    r2 = client.post("/api/analyze-url", headers=h, json={"url": "https://example.com"})
+    assert r2.status_code == 429
+
+    # Advance past the window and try again
+    t["now"] += 11.0
+    r3 = client.post("/api/analyze-url", headers=h, json={"url": "https://example.com"})
+    assert r3.status_code == 200
