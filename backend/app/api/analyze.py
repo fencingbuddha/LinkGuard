@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlparse
 from app.db import SessionLocal
 from app.models.scan_event import RiskCategory, ScanEvent
 
-from app.api.deps import OrgContext, require_api_key
+from app.api.deps import OrgContext, require_api_key, rate_limit_analyze_url
 from app.services.url_analysis import analyze_url as analyze_url_service
 
 router = APIRouter()
@@ -47,7 +47,7 @@ class AnalyzeUrlIn(BaseModel):
     url: str
 
 
-@router.post("/api/analyze-url")
+@router.post("/api/analyze-url", dependencies=[Depends(rate_limit_analyze_url)])
 def analyze_url_endpoint(payload: AnalyzeUrlIn, ctx: OrgContext = Depends(require_api_key)):
     url = (payload.url or "").strip()
     if not url:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Deque, Dict, Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,8 @@ from app.models.api_key import ApiKey
 
 import hashlib
 import os
+import time
+from collections import deque
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,62 @@ def require_api_key(
             )
 
     return OrgContext(org_id=api_key.org_id, api_key_id=api_key.id)
+
+
+# ---- Rate limiting (MVP: in-memory fixed window) ----
+# Defaults are intentionally conservative for local dev; override via env.
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30"))
+RATE_LIMIT_WINDOW_S = int(os.getenv("RATE_LIMIT_WINDOW_S", "60"))
+
+# key -> deque of request timestamps (seconds)
+_RATE_BUCKETS: Dict[str, Deque[float]] = {}
+
+
+def _rate_limit_key(ctx: OrgContext, request: Request) -> str:
+    """Compute the limiter key.
+
+    MVP: limit per API key id. If for some reason ctx is unavailable, fall back
+    to client IP.
+    """
+    if getattr(ctx, "api_key_id", None):
+        return f"api_key:{ctx.api_key_id}"
+    client_host = getattr(getattr(request, "client", None), "host", None) or "unknown"
+    return f"ip:{client_host}"
+
+
+def rate_limit_analyze_url(
+    request: Request,
+    ctx: OrgContext = Depends(require_api_key),
+) -> None:
+    """Rate limit dependency for /api/analyze-url.
+
+    Uses an in-memory fixed window (sliding by timestamp eviction).
+    Returns 429 with Retry-After when exceeded.
+
+    NOTE: This is per-process; production should move to Redis or similar.
+    """
+    now = time.time()
+
+    key = _rate_limit_key(ctx, request)
+    bucket = _RATE_BUCKETS.get(key)
+    if bucket is None:
+        bucket = deque()
+        _RATE_BUCKETS[key] = bucket
+
+    cutoff = now - RATE_LIMIT_WINDOW_S
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+
+    if len(bucket) >= RATE_LIMIT_MAX:
+        # Earliest timestamp still in window determines when quota frees up.
+        retry_after = int((bucket[0] + RATE_LIMIT_WINDOW_S) - now) if bucket else RATE_LIMIT_WINDOW_S
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(max(retry_after, 1))},
+        )
+
+    bucket.append(now)
 
 
 def require_admin(
