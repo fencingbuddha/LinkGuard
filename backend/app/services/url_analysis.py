@@ -146,11 +146,16 @@ def analyze_url(url: str) -> dict:
         }
 
     except Exception:
-        # If parsing blows up, treat as suspicious (don’t reward broken inputs)
+        normalized = url
+        try:
+            normalized = _ensure_scheme(url)
+        except Exception:
+            pass
+
         return {
             "risk_category": RiskCategory.SUSPICIOUS.value,
             "score": 40,
             "explanations": ["Invalid or unparseable URL"],
-            "normalized_url": url,
+            "normalized_url": normalized,
             "host": None,
         }
