@@ -308,23 +308,22 @@ document.addEventListener(
     const a = findAnchor(e.target);
     if (!a) return;
 
-    const href = a.getAttribute("href");
-    if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
+    // Use the resolved destination URL (not the current page URL)
+    const url = a.href;
+    if (!url) return;
+
+    // Ignore non-http(s) navigation and in-page anchors
+    if (url.startsWith("#") || url.startsWith("javascript:")) return;
+    if (!url.startsWith("http://") && !url.startsWith("https://")) return;
 
     // Don't interfere with new-tab behavior
     const target = (a.getAttribute("target") || "").toLowerCase();
     if (target === "_blank") return;
 
-    let url;
-    try {
-      url = new URL(href, window.location.href).toString();
-    } catch {
-      return;
-    }
-
     // Block navigation while we ask background
     e.preventDefault();
-    e.stopPropagation();
+    // Stronger than stopPropagation() to prevent page handlers from navigating.
+    e.stopImmediatePropagation();
 
     const flow_id = lgFlowId();
     const domain = lgDomain(url) || undefined;

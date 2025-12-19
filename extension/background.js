@@ -161,15 +161,30 @@ async function analyzeUrlViaBackend(url, flowId) {
       };
     }
 
+    // Normalize backend response shape so content.js can rely on `result.risk_category`.
+    // Some backends may return `category` instead of `risk_category`.
+    const normalized =
+      data && typeof data === "object"
+        ? {
+            ...data,
+            risk_category: data.risk_category ?? data.category ?? null,
+            explanations: Array.isArray(data.explanations) ? data.explanations : [],
+          }
+        : {
+            risk_category: null,
+            explanations: [],
+            raw: data ?? text,
+          };
+
     logEvent("analysis_result", {
       flow_id: flowId || null,
       url,
       domain: _safeDomainFromUrl(url),
-      risk_category: data?.risk_category ?? null,
-      score: data?.score ?? null,
-      result: data,
+      risk_category: normalized?.risk_category ?? null,
+      score: normalized?.score ?? null,
+      result: normalized,
     });
-    return { ok: true, result: data };
+    return { ok: true, result: normalized };
   } catch (err) {
     logEvent("analysis_error", {
       level: "error",
