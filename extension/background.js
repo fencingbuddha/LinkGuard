@@ -269,3 +269,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   return false;
 });
+
+// --- Toolbar behavior ---
+// Clicking the extension icon should open the Options page (no popup UI).
+// This is a quick demo-polish win and gives users a consistent entry point.
+
+if (chrome?.action?.onClicked) {
+  chrome.action.onClicked.addListener(() => {
+    chrome.runtime.openOptionsPage();
+    logEvent("toolbar_open_options", { ts: _nowIso() });
+  });
+}
