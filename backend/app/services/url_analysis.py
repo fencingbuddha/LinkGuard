@@ -11,7 +11,15 @@ SUSPICIOUS_TLDS = {
     "zip", "mov", "top", "xyz", "click", "country", "stream", "gq", "tk"
 }
 
+
 BRANDS = {"google", "paypal", "microsoft", "apple", "amazon"}
+
+# Common phishing-related path keywords (MVP heuristic)
+SUSPICIOUS_PATH_KEYWORDS = {
+    "login", "signin", "sign-in", "verify", "verification",
+    "password", "reset", "update", "secure", "account",
+    "billing", "bank", "wallet", "confirm"
+}
 
 class RiskCategory(str, Enum):
     SAFE = "SAFE"
@@ -87,6 +95,7 @@ def analyze_url(url: str) -> dict:
         normalized_url = _ensure_scheme(url)
         parsed = urlparse(normalized_url)
         host = (parsed.hostname or "").lower()
+        path = (parsed.path or "").lower()
 
         if not host:
             return {
@@ -128,6 +137,14 @@ def analyze_url(url: str) -> dict:
         if is_typo and msg:
             score += 30
             explanations.append(msg)
+
+        # Rule: Suspicious path keywords (e.g., login / verify pages)
+        if path:
+            for kw in SUSPICIOUS_PATH_KEYWORDS:
+                if kw in path:
+                    score += 30
+                    explanations.append(f"Suspicious path keyword: '{kw}'")
+                    break
 
         # Category mapping
         if score >= 60:

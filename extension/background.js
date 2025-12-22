@@ -1,13 +1,80 @@
 async function getConfig() {
-  const { backendUrl = "", apiKey = "" } = await chrome.storage.local.get([
+  // Support multiple key names so Options UI and background stay in sync even if
+  // we changed naming during development.
+  const data = await chrome.storage.local.get([
     "backendUrl",
     "apiKey",
+    "backend_url",
+    "api_key",
+    "BACKEND_URL",
+    "API_KEY",
+    "LG_BACKEND_URL",
+    "LG_API_KEY",
   ]);
+
+  const backendUrl = String(
+    data.backendUrl ?? data.backend_url ?? data.BACKEND_URL ?? data.LG_BACKEND_URL ?? ""
+  ).trim();
+
+  const apiKey = String(
+    data.apiKey ?? data.api_key ?? data.API_KEY ?? data.LG_API_KEY ?? ""
+  ).trim();
+
   return { backendUrl, apiKey };
 }
 
 function _trimTrailingSlashes(s) {
   return (s || "").replace(/\/+$/, "");
+}
+
+// --- Config fingerprinting ---
+// If the user changes backend URL / API key during testing, any per-domain session decision
+// should be invalidated so we don't silently bypass analysis with a stale ALLOW.
+
+const _CFG_FINGERPRINT_KEY = "__lg_cfg_fingerprint";
+const _AUTH_INVALID_KEY = "__lg_auth_invalid";
+
+function _cfgFingerprint(cfg) {
+  const b = (cfg?.backendUrl || "").trim();
+  const k = (cfg?.apiKey || "").trim();
+  return `${b}::${k}`;
+}
+
+async function _ensureConfigFingerprint(flowId) {
+  const cfg = await getConfig();
+  const fp = _cfgFingerprint(cfg);
+
+  const session = _getSessionStorage();
+  if (!session) {
+    // If we don't have session storage, we can only clear the in-memory map
+    // when config changes. Track last fp in a global.
+    if (typeof self.__lg_last_fp === "string" && self.__lg_last_fp !== fp) {
+      _decisionMem.clear();
+      logEvent("decision_cache_cleared", {
+        level: "warn",
+        flow_id: flowId || null,
+        reason: "CONFIG_CHANGED",
+      });
+    }
+    self.__lg_last_fp = fp;
+    return;
+  }
+
+  const data = await session.get([_CFG_FINGERPRINT_KEY]);
+  const prev = data?.[_CFG_FINGERPRINT_KEY] ?? null;
+
+  if (prev && prev !== fp) {
+    // Clear all per-domain decisions for this session to force re-analysis.
+    await session.clear();
+    logEvent("decision_cache_cleared", {
+      level: "warn",
+      flow_id: flowId || null,
+      reason: "CONFIG_CHANGED",
+    });
+  }
+
+  // Re-set fingerprint after any clear.
+  await session.set({ [_CFG_FINGERPRINT_KEY]: fp });
 }
 
 // --- Structured event logging ---
@@ -42,6 +109,31 @@ function logEvent(event, details = {}) {
   else console.log(payload);
 }
 
+// --- Make background failures visible (Issue #58 debugging aid) ---
+// MV3 service workers can fail quietly; capture uncaught errors so we can see why
+// analysis isn't reaching the backend.
+self.addEventListener("unhandledrejection", (e) => {
+  try {
+    logEvent("bg_unhandledrejection", {
+      level: "error",
+      message: String(e?.reason || e),
+    });
+  } catch {
+    console.error("[LinkGuard][bg] unhandledrejection", e?.reason || e);
+  }
+});
+
+self.addEventListener("error", (e) => {
+  try {
+    logEvent("bg_error", {
+      level: "error",
+      message: String(e?.message || e),
+    });
+  } catch {
+    console.error("[LinkGuard][bg] error", e?.message || e);
+  }
+});
+
 // --- Decision memory (session-based) ---
 // Stores user decisions per normalized hostname for the current browser session.
 // MV3 supports chrome.storage.session; we fall back to an in-memory Map if unavailable.
@@ -69,6 +161,14 @@ async function getDecisionForUrl(url) {
 
   const session = _getSessionStorage();
   if (session) {
+    const flags = await session.get([_AUTH_INVALID_KEY]);
+    if (flags?.[_AUTH_INVALID_KEY]) {
+      // Hard-block all traffic when the backend auth/config is known-bad.
+      return { key, decision: null, reason: "AUTH_INVALID" };
+    }
+  }
+
+  if (session) {
     const data = await session.get([key]);
     const decision = data?.[key] ?? null;
     return { key, decision };
@@ -94,25 +194,93 @@ async function setDecisionForKey(key, decision) {
 async function analyzeUrlViaBackend(url, flowId) {
   const { backendUrl, apiKey } = await getConfig();
 
+  // If config changed since the last click, invalidate any cached session decisions.
+  await _ensureConfigFingerprint(flowId);
+
+  {
+    const session = _getSessionStorage();
+    if (session) {
+      const flags = await session.get([_AUTH_INVALID_KEY]);
+        if (flags?.[_AUTH_INVALID_KEY]) {
+        const endpoint = backendUrl ? `${_trimTrailingSlashes(backendUrl)}/api/analyze-url` : "";
+
+        logEvent("fallback_not_configured", {
+          level: "warn",
+          flow_id: flowId || null,
+          reason: "AUTH_ERROR",
+          status: 401,
+          endpoint,
+        });
+
+        return {
+          ok: false,
+          error: "AUTH_ERROR",
+          status: 401,
+          message: "Invalid API key",
+          notice: {
+            code: "AUTH_INVALID",
+            message: "LinkGuard is misconfigured (invalid API key) — contact IT",
+          },
+        };
+      }
+    }
+  }
+
+  logEvent("config_loaded", {
+    flow_id: flowId || null,
+    has_backend_url: Boolean(backendUrl),
+    has_api_key: Boolean(apiKey),
+    backend_url_preview: backendUrl ? `${backendUrl.slice(0, 40)}${backendUrl.length > 40 ? "…" : ""}` : "",
+    api_key_prefix: apiKey ? `${apiKey.slice(0, 6)}…` : "",
+  });
+
   if (!backendUrl) {
+    logEvent("fallback_not_configured", {
+      level: "warn",
+      flow_id: flowId || null,
+      reason: "MISSING_BACKEND_URL",
+    });
+
     return {
       ok: false,
       error: "MISSING_BACKEND_URL",
       message: "Backend URL is not configured.",
+      notice: {
+        code: "NOT_CONFIGURED",
+        message: "LinkGuard isn’t configured yet — contact IT",
+      },
     };
   }
 
   if (!apiKey) {
+    logEvent("fallback_not_configured", {
+      level: "warn",
+      flow_id: flowId || null,
+      reason: "MISSING_API_KEY",
+      backend_url_preview: backendUrl ? `${backendUrl.slice(0, 40)}${backendUrl.length > 40 ? "…" : ""}` : "",
+    });
+
     return {
       ok: false,
       error: "MISSING_API_KEY",
       message: "API key is not configured.",
+      notice: {
+        code: "NOT_CONFIGURED",
+        message: "LinkGuard isn’t configured yet — contact IT",
+      },
     };
   }
 
   const endpoint = `${_trimTrailingSlashes(backendUrl)}/api/analyze-url`;
 
   logEvent("analyze_request", {
+    flow_id: flowId || null,
+    url,
+    domain: _safeDomainFromUrl(url),
+    endpoint,
+  });
+
+  logEvent("fetch_start", {
     flow_id: flowId || null,
     url,
     domain: _safeDomainFromUrl(url),
@@ -127,6 +295,15 @@ async function analyzeUrlViaBackend(url, flowId) {
         "X-API-Key": apiKey,
       },
       body: JSON.stringify({ url }),
+    });
+
+    logEvent("fetch_done", {
+      flow_id: flowId || null,
+      url,
+      domain: _safeDomainFromUrl(url),
+      endpoint,
+      status: res.status,
+      ok: res.ok,
     });
 
     const text = await res.text();
@@ -150,6 +327,40 @@ async function analyzeUrlViaBackend(url, flowId) {
           `Backend returned ${res.status}`,
         raw: data ?? text,
       });
+      // Safe-fallback on auth/config errors: do NOT block browsing.
+      // Content script can show a single non-scary notice.
+      const status = res.status;
+      const isAuthOrConfigError = status === 401 || status === 403;
+
+      if (isAuthOrConfigError) {
+        logEvent("fallback_not_configured", {
+          level: "warn",
+          flow_id: flowId || null,
+          reason: "AUTH_ERROR",
+          status,
+          endpoint,
+        });
+        {
+          const session = _getSessionStorage();
+          if (session) {
+            await session.set({ [_AUTH_INVALID_KEY]: true });
+          } else {
+            // Fallback: clear any in-memory decisions so we don't silently allow.
+            _decisionMem.clear();
+          }
+        }
+        return {
+          ok: false,
+          error: "AUTH_ERROR",
+          status,
+          message: (data && (data.detail || data.message)) || "Invalid API key",
+          notice: {
+            code: "AUTH_INVALID",
+            message: "LinkGuard is misconfigured (invalid API key) — contact IT",
+          },
+          raw: data ?? text,
+        };
+      }
       return {
         ok: false,
         error: "HTTP_ERROR",
@@ -218,15 +429,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "GET_DECISION") {
     const url = message?.url;
 
-    logEvent("decision_lookup", {
-      flow_id: message?.flowId || null,
-      url,
-      domain: _safeDomainFromUrl(url),
-    });
-
-    getDecisionForUrl(url).then(({ key, decision }) => {
+    (async () => {
+      await _ensureConfigFingerprint(message?.flowId || null);
+      const { key, decision } = await getDecisionForUrl(url);
       sendResponse({ ok: true, key, decision });
-    });
+    })();
 
     return true; // async response
   }

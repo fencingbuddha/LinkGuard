@@ -16,8 +16,177 @@ function normalizeDecisionKey(urlString) {
   }
 }
 
+
 // --- Structured event logging (Issue #37) ---
 const LG_LOG = true;
+
+// --- Safe fallback prompt (Issue #58) ---
+// If LinkGuard is misconfigured or the backend is unavailable, do NOT show
+// scary warnings. Instead, show a simple prompt on every affected click
+// that lets the user knowingly continue.
+
+function lgShowConfigBypassPrompt({ message, onContinue, onCancel }) {
+  const id = "linkguard-config-prompt";
+  const existing = document.getElementById(id);
+  if (existing) existing.remove();
+
+  // Backdrop (lightweight)
+  const overlay = document.createElement("div");
+  overlay.id = id;
+  overlay.style.position = "fixed";
+  overlay.style.inset = "0";
+  overlay.style.zIndex = "2147483647";
+  overlay.style.background = "rgba(0,0,0,0.35)";
+  overlay.style.display = "flex";
+  overlay.style.alignItems = "flex-end";
+  overlay.style.justifyContent = "center";
+  overlay.style.padding = "16px";
+
+  // Bottom sheet card
+  const card = document.createElement("div");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.style.width = "min(720px, 100%)";
+  card.style.background = "rgba(20,20,20,0.96)";
+  card.style.border = "1px solid rgba(255,255,255,0.14)";
+  card.style.borderRadius = "14px";
+  card.style.padding = "14px 14px";
+  card.style.color = "#fff";
+  card.style.fontFamily =
+    "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  card.style.boxShadow = "0 14px 44px rgba(0,0,0,0.45)";
+
+  const title = document.createElement("div");
+  title.textContent = "LinkGuard isn’t configured";
+  title.style.fontWeight = "800";
+  title.style.fontSize = "14px";
+  title.style.letterSpacing = "0.02em";
+
+  const body = document.createElement("div");
+  body.textContent = message;
+  body.style.marginTop = "6px";
+  body.style.fontSize = "13px";
+  body.style.opacity = "0.92";
+
+  const actions = document.createElement("div");
+  actions.style.display = "flex";
+  actions.style.justifyContent = "flex-end";
+  actions.style.gap = "10px";
+  actions.style.marginTop = "12px";
+
+  const baseBtn = (btn) => {
+    btn.type = "button";
+    btn.style.padding = "9px 12px";
+    btn.style.borderRadius = "10px";
+    btn.style.cursor = "pointer";
+    btn.style.fontWeight = "700";
+    btn.style.border = "1px solid rgba(255,255,255,0.18)";
+    btn.style.background = "#2a2a2a";
+    btn.style.color = "#fff";
+  };
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "Go Back";
+  baseBtn(cancelBtn);
+
+  const continueBtn = document.createElement("button");
+  continueBtn.textContent = "Continue";
+  baseBtn(continueBtn);
+  continueBtn.style.background = "#4a4a4a";
+
+  const cleanup = () => {
+    try {
+      overlay.remove();
+    } catch {
+      // ignore
+    }
+    document.removeEventListener("keydown", onKeyDown, true);
+  };
+
+  const doCancel = () => {
+    cleanup();
+    onCancel && onCancel();
+  };
+
+  const doContinue = () => {
+    cleanup();
+    onContinue && onContinue();
+  };
+
+  const onKeyDown = (ev) => {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      doCancel();
+    }
+  };
+
+  cancelBtn.onclick = doCancel;
+  continueBtn.onclick = doContinue;
+
+  // Clicking outside cancels
+  overlay.addEventListener("click", (ev) => {
+    if (ev.target === overlay) doCancel();
+  });
+  card.addEventListener("click", (ev) => ev.stopPropagation());
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(continueBtn);
+
+  card.appendChild(title);
+  card.appendChild(body);
+  card.appendChild(actions);
+  overlay.appendChild(card);
+  document.documentElement.appendChild(overlay);
+
+  document.addEventListener("keydown", onKeyDown, true);
+
+  // Focus Continue for quick keyboard flow
+  setTimeout(() => {
+    try {
+      continueBtn.focus();
+    } catch {
+      // ignore
+    }
+  }, 0);
+}
+
+const LG_SAFE_FALLBACK_ERRORS = new Set([
+  "MISSING_BACKEND_URL",
+  "MISSING_API_KEY",
+  "NETWORK_ERROR",
+  "AUTH_ERROR",
+  "NOT_CONFIGURED",
+  "HTTP_ERROR",
+]);
+
+function lgIsSafeFallbackError(res) {
+  const err = String(res?.error || "");
+  if (LG_SAFE_FALLBACK_ERRORS.has(err)) return true;
+
+  // Defensive: treat 401/403 as misconfiguration even if wrapped as HTTP_ERROR
+  const status = Number(res?.status ?? res?.raw?.status ?? res?.raw?.code);
+  if (status === 401 || status === 403) return true;
+
+  const detail =
+    String(res?.raw?.detail || res?.raw?.message || res?.message || "") ||
+    String(res?.notice?.message || "");
+  if (/invalid\s+api\s+key/i.test(detail)) return true;
+
+  return false;
+}
+
+function lgConfigMessageFromResponse(res) {
+  const status = Number(res?.status);
+  const noticeMsg = String(res?.notice?.message || "").trim();
+
+  if (noticeMsg) return noticeMsg;
+
+  if (status === 401 || status === 403) {
+    return "LinkGuard is misconfigured (invalid API key) — contact IT. You can continue anyway.";
+  }
+
+  return "LinkGuard isn’t configured yet — contact IT. You can continue anyway.";
+}
 
 function lgFlowId() {
   try {
@@ -303,12 +472,9 @@ function showWarningOverlay({ url, riskCategory, explanation, onProceed, onCance
 document.addEventListener(
   "click",
   async (e) => {
-    if (isModifiedClick(e)) return;
-
     const a = findAnchor(e.target);
     if (!a) return;
 
-    // Use the resolved destination URL (not the current page URL)
     const url = a.href;
     if (!url) return;
 
@@ -316,51 +482,27 @@ document.addEventListener(
     if (url.startsWith("#") || url.startsWith("javascript:")) return;
     if (!url.startsWith("http://") && !url.startsWith("https://")) return;
 
-    // Don't interfere with new-tab behavior
-    const target = (a.getAttribute("target") || "").toLowerCase();
-    if (target === "_blank") return;
+    // Determine user intent (same-tab vs new-tab)
+    const targetAttr = (a.getAttribute("target") || "").toLowerCase();
+    const wantsNewTab =
+      targetAttr === "_blank" || e.metaKey || e.ctrlKey || e.button === 1;
 
-    // Block navigation while we ask background
+    // We will handle navigation ourselves
     e.preventDefault();
-    // Stronger than stopPropagation() to prevent page handlers from navigating.
     e.stopImmediatePropagation();
 
     const flow_id = lgFlowId();
     const domain = lgDomain(url) || undefined;
 
-    lgLog("click_intercepted", { flow_id, url, domain });
+    lgLog("click_intercepted", { flow_id, url, domain, wantsNewTab });
 
-    // Decision memory (session-based): if user already chose allow/block for this domain,
-    // respect it without prompting again.
-    const { key: decisionKey, decision } = await getDecisionForUrl(url, flow_id);
-
-    if (decision === "ALLOW") {
-      lgLog("decision_applied", {
-        flow_id,
-        url,
-        domain,
-        decision: "ALLOW",
-        reason: "decision_memory",
-        key: decisionKey || undefined,
-      });
-      window.location.assign(url);
-      return;
-    }
-
-    if (decision === "BLOCK") {
-      lgLog("decision_applied", {
-        flow_id,
-        url,
-        domain,
-        decision: "BLOCK",
-        reason: "decision_memory",
-        key: decisionKey || undefined,
-      });
-      // Stay on page; do not navigate.
-      return;
-    }
+    const navigate = () => {
+      if (wantsNewTab) window.open(url, "_blank", "noopener,noreferrer");
+      else window.location.assign(url);
+    };
 
     try {
+      // Always analyze FIRST so auth errors (401/403) can trigger the misconfig prompt.
       lgLog("analyze_request", { flow_id, url, domain });
       const res = await chrome.runtime.sendMessage({
         type: "ANALYZE_URL",
@@ -368,16 +510,35 @@ document.addEventListener(
         flowId: flow_id,
       });
 
-      // Background now returns: { ok: boolean, result?: {...}, error?: string, ... }
-      if (!res?.ok) {
-        // Treat failures as fail-open, but do not cache a decision.
-        lgError("analysis_failed_fail_open", {
+        if (!res?.ok) {
+        lgError("analysis_failed", {
           flow_id,
           url,
           domain,
           extra: { response: res },
         });
-        window.location.assign(url); // fail-open for MVP
+
+        if (lgIsSafeFallbackError(res)) {
+          lgLog("fallback_prompt", {
+            flow_id,
+            url,
+            domain,
+            error: res?.error,
+            status: res?.status,
+          });
+
+          lgShowConfigBypassPrompt({
+            message: lgConfigMessageFromResponse(res),
+            onContinue: navigate,
+            onCancel: () => {
+              // stay on page
+            },
+          });
+          return;
+        }
+
+        // Non-config failures: fail-open
+        navigate();
         return;
       }
 
@@ -395,11 +556,9 @@ document.addEventListener(
         ? result.explanations.join("\n")
         : result.explanation || "(no details)";
 
-      // Centralized Risk → UX policy mapping
       const policy = getUxPolicyForRisk(riskCategory);
 
       if (policy.action === "ALLOW") {
-        // SAFE/UNKNOWN: navigate immediately (fail-open for MVP)
         lgLog("navigation", {
           flow_id,
           url,
@@ -407,11 +566,13 @@ document.addEventListener(
           decision: "ALLOW",
           reason: policy.tier === "SAFE" ? "safe_allow" : "unknown_fail_open",
         });
-        window.location.assign(url);
+        navigate();
         return;
       }
 
-      // Overlay (MEDIUM/HIGH): show warning and let user choose
+      // Overlay (MEDIUM/HIGH): allow/block with per-session memory
+      const { key: decisionKey } = await getDecisionForUrl(url, flow_id);
+
       lgLog("overlay_shown", {
         flow_id,
         url,
@@ -432,9 +593,8 @@ document.addEventListener(
             reason: "user_override",
             key: decisionKey || undefined,
           });
-          // Cache allow for this domain for the current browser session.
           if (decisionKey) await setDecisionForKey(decisionKey, "ALLOW", flow_id);
-          window.location.assign(url);
+          navigate();
         },
         onCancel: async () => {
           lgLog("user_decision", {
@@ -445,22 +605,21 @@ document.addEventListener(
             reason: "user_override",
             key: decisionKey || undefined,
           });
-          // Cache block for this domain for the current browser session.
           if (decisionKey) await setDecisionForKey(decisionKey, "BLOCK", flow_id);
-          // stay on the current page; overlay is removed in the helper
+          // stay put
         },
       });
-      return;
     } catch (err) {
-      // Fail-open for now (don’t break the web)
       lgError("exception_fail_open", {
         flow_id,
         url,
         domain,
         extra: { message: String(err?.message || err) },
       });
-      window.location.assign(url);
+      // Fail-open
+      if (wantsNewTab) window.open(url, "_blank", "noopener,noreferrer");
+      else window.location.assign(url);
     }
   },
-  true // capture
+  true
 );
