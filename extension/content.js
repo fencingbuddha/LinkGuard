@@ -148,6 +148,144 @@ function lgShowConfigBypassPrompt({ message, onContinue, onCancel }) {
       // ignore
     }
   }, 0);
+
+}
+
+function lgShowBlockedReminderPrompt({ url, message, onProceed, onCancel }) {
+  const id = "linkguard-blocked-reminder";
+  const existing = document.getElementById(id);
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = id;
+  overlay.style.position = "fixed";
+  overlay.style.inset = "0";
+  overlay.style.zIndex = "2147483647";
+  overlay.style.background = "rgba(0,0,0,0.35)";
+  overlay.style.display = "flex";
+  overlay.style.alignItems = "flex-end";
+  overlay.style.justifyContent = "center";
+  overlay.style.padding = "16px";
+
+  const card = document.createElement("div");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.style.width = "min(720px, 100%)";
+  card.style.background = "rgba(20,20,20,0.96)";
+  card.style.border = "1px solid rgba(255,255,255,0.14)";
+  card.style.borderRadius = "14px";
+  card.style.padding = "14px 14px";
+  card.style.color = "#fff";
+  card.style.fontFamily =
+    "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  card.style.boxShadow = "0 14px 44px rgba(0,0,0,0.45)";
+
+  const title = document.createElement("div");
+  title.textContent = "LinkGuard blocked this link";
+  title.style.fontWeight = "800";
+  title.style.fontSize = "14px";
+  title.style.letterSpacing = "0.02em";
+
+  const body = document.createElement("div");
+  body.textContent = message;
+  body.style.marginTop = "6px";
+  body.style.fontSize = "13px";
+  body.style.opacity = "0.92";
+
+  const dest = document.createElement("pre");
+  dest.textContent = url;
+  dest.style.marginTop = "10px";
+  dest.style.marginBottom = "0";
+  dest.style.whiteSpace = "pre-wrap";
+  dest.style.wordBreak = "break-all";
+  dest.style.background = "rgba(0,0,0,0.35)";
+  dest.style.border = "1px solid rgba(255,255,255,0.12)";
+  dest.style.borderRadius = "10px";
+  dest.style.padding = "10px";
+  dest.style.fontSize = "12px";
+  dest.style.opacity = "0.95";
+
+  const actions = document.createElement("div");
+  actions.style.display = "flex";
+  actions.style.justifyContent = "flex-end";
+  actions.style.gap = "10px";
+  actions.style.marginTop = "12px";
+
+  const baseBtn = (btn) => {
+    btn.type = "button";
+    btn.style.padding = "9px 12px";
+    btn.style.borderRadius = "10px";
+    btn.style.cursor = "pointer";
+    btn.style.fontWeight = "700";
+    btn.style.border = "1px solid rgba(255,255,255,0.18)";
+    btn.style.background = "#2a2a2a";
+    btn.style.color = "#fff";
+  };
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "Go Back";
+  baseBtn(cancelBtn);
+
+  const proceedBtn = document.createElement("button");
+  proceedBtn.textContent = "Proceed Anyway";
+  baseBtn(proceedBtn);
+  proceedBtn.style.background = "#4a4a4a";
+
+  const cleanup = () => {
+    try {
+      overlay.remove();
+    } catch {
+      // ignore
+    }
+    document.removeEventListener("keydown", onKeyDown, true);
+  };
+
+  const doCancel = () => {
+    cleanup();
+    onCancel && onCancel();
+  };
+
+  const doProceed = () => {
+    cleanup();
+    onProceed && onProceed();
+  };
+
+  const onKeyDown = (ev) => {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      doCancel();
+    }
+  };
+
+  cancelBtn.onclick = doCancel;
+  proceedBtn.onclick = doProceed;
+
+  // Clicking outside cancels
+  overlay.addEventListener("click", (ev) => {
+    if (ev.target === overlay) doCancel();
+  });
+  card.addEventListener("click", (ev) => ev.stopPropagation());
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(proceedBtn);
+
+  card.appendChild(title);
+  card.appendChild(body);
+  card.appendChild(dest);
+  card.appendChild(actions);
+  overlay.appendChild(card);
+  document.documentElement.appendChild(overlay);
+
+  document.addEventListener("keydown", onKeyDown, true);
+
+  // Focus Proceed for quick keyboard flow
+  setTimeout(() => {
+    try {
+      proceedBtn.focus();
+    } catch {
+      // ignore
+    }
+  }, 0);
 }
 
 const LG_SAFE_FALLBACK_ERRORS = new Set([
@@ -225,10 +363,9 @@ function lgError(reason, data = {}) {
 
 async function getDecisionForUrl(urlString, flowId) {
   const fallbackKey = normalizeDecisionKey(urlString);
-  if (!fallbackKey) return { key: null, decision: null };
+  if (!fallbackKey) return { key: null, decision: null, reason: null };
 
   try {
-    // Background expects { type: "GET_DECISION", url }
     const res = await chrome.runtime.sendMessage({
       type: "GET_DECISION",
       url: urlString,
@@ -238,9 +375,10 @@ async function getDecisionForUrl(urlString, flowId) {
     return {
       key: res?.key || fallbackKey,
       decision: res?.decision ?? null,
+      reason: res?.reason ?? null, // <-- NEW
     };
   } catch {
-    return { key: fallbackKey, decision: null };
+    return { key: fallbackKey, decision: null, reason: null };
   }
 }
 
@@ -482,6 +620,7 @@ document.addEventListener(
     if (url.startsWith("#") || url.startsWith("javascript:")) return;
     if (!url.startsWith("http://") && !url.startsWith("https://")) return;
 
+
     // Determine user intent (same-tab vs new-tab)
     const targetAttr = (a.getAttribute("target") || "").toLowerCase();
     const wantsNewTab =
@@ -500,6 +639,48 @@ document.addEventListener(
       if (wantsNewTab) window.open(url, "_blank", "noopener,noreferrer");
       else window.location.assign(url);
     };
+
+    // Decision memory: if the user previously allowed/blocked this domain, apply it.
+    // IMPORTANT: When BLOCK is set, show a visible reminder so it doesn't look like the page is broken.
+    const { key: decisionKey, decision, reason } = await getDecisionForUrl(url, flow_id);
+
+    if (decision === "ALLOW") {
+      lgLog("decision_applied", {
+        flow_id,
+        url,
+        domain,
+        decision: "ALLOW",
+        reason: reason || "decision_memory",
+        key: decisionKey || undefined,
+      });
+      navigate();
+      return;
+    }
+
+    if (decision === "BLOCK") {
+      lgLog("decision_applied", {
+        flow_id,
+        url,
+        domain,
+        decision: "BLOCK",
+        reason: reason || "decision_memory",
+        key: decisionKey || undefined,
+      });
+
+      lgShowBlockedReminderPrompt({
+        url,
+        message: "This site was previously blocked for this session. If this is unexpected, contact IT. You can proceed anyway.",
+        onProceed: async () => {
+          // User knowingly overrides the prior session decision.
+          if (decisionKey) await setDecisionForKey(decisionKey, "ALLOW", flow_id);
+          navigate();
+        },
+        onCancel: () => {
+          // stay on page
+        },
+      });
+      return;
+    }
 
     try {
       // Always analyze FIRST so auth errors (401/403) can trigger the misconfig prompt.
@@ -571,7 +752,7 @@ document.addEventListener(
       }
 
       // Overlay (MEDIUM/HIGH): allow/block with per-session memory
-      const { key: decisionKey } = await getDecisionForUrl(url, flow_id);
+      // decisionKey already computed above (decision memory section)
 
       lgLog("overlay_shown", {
         flow_id,
