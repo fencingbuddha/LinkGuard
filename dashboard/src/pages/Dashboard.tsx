@@ -27,10 +27,15 @@ export default function Dashboard() {
   const [stats, setStats] = useState<AdminStatsResponse | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+  const [refreshToken, setRefreshToken] = useState(0)
 
   const handleLogout = () => {
     clearToken()
     navigate('/')
+  }
+
+  const handleRefresh = () => {
+    setRefreshToken((prev) => prev + 1)
   }
 
   useEffect(() => {
@@ -58,7 +63,7 @@ export default function Dashboard() {
     return () => {
       isMounted = false
     }
-  }, [orgId])
+  }, [orgId, refreshToken])
 
   const totalScans = stats?.total_scans ?? 0
   const risk = stats?.risk_distribution ?? { SAFE: 0, SUSPICIOUS: 0, DANGEROUS: 0 }
@@ -72,7 +77,12 @@ export default function Dashboard() {
             Org: <code>{orgId}</code>
           </p>
         </div>
-        <button onClick={handleLogout}>Log out</button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button onClick={handleRefresh} disabled={loading}>
+            Refresh stats
+          </button>
+          <button onClick={handleLogout}>Log out</button>
+        </div>
       </header>
 
       <section style={{ marginTop: '2rem' }}>
