@@ -49,35 +49,6 @@ export default function Dashboard() {
   useEffect(() => {
     let isMounted = true
 
-    const loadOrgs = async () => {
-      setOrgsLoading(true)
-      setOrgsError(null)
-
-      try {
-        const data = await api.get<OrgSummary[]>('/api/admin/orgs')
-        if (!isMounted) return
-        setOrgs(data)
-        if (!orgIdOverride && data.length > 0) {
-          setOrgIdentifier(String(data[0].id))
-        }
-      } catch (e) {
-        const message = e instanceof Error ? e.message : 'Failed to load organizations'
-        if (isMounted) setOrgsError(message)
-      } finally {
-        if (isMounted) setOrgsLoading(false)
-      }
-    }
-
-    void loadOrgs()
-
-    return () => {
-      isMounted = false
-    }
-  }, [orgIdOverride])
-
-  useEffect(() => {
-    let isMounted = true
-
     const run = async () => {
       if (!orgIdentifier) {
         if (isMounted) {
@@ -108,7 +79,7 @@ export default function Dashboard() {
     return () => {
       isMounted = false
     }
-  }, [orgIdentifier, refreshToken])
+  }, [orgId, refreshToken])
 
   const totalScans = stats?.total_scans ?? 0
   const risk = stats?.risk_distribution ?? { SAFE: 0, SUSPICIOUS: 0, DANGEROUS: 0 }
@@ -126,7 +97,7 @@ export default function Dashboard() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button onClick={handleRefresh} disabled={loading || orgsLoading || !orgIdentifier}>
+          <button onClick={handleRefresh} disabled={loading}>
             Refresh stats
           </button>
           <button onClick={handleLogout}>Log out</button>
