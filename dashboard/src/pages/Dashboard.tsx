@@ -5,6 +5,11 @@ import { api, clearToken } from '../api/client'
 
 type RiskCategory = 'SAFE' | 'SUSPICIOUS' | 'DANGEROUS'
 
+type OrgSummary = {
+  id: number
+  name: string
+}
+
 type AdminStatsResponse = {
   total_scans: number
   risk_distribution: Record<RiskCategory, number>
@@ -21,28 +26,73 @@ function formatPercent(numerator: number, denominator: number): string {
 export default function Dashboard() {
   const navigate = useNavigate()
 
-  // MVP: use env var if provided, otherwise a simple default.
-  const orgId = useMemo(() => import.meta.env.VITE_ORG_ID ?? 'demo-org', [])
+  const orgIdOverride = useMemo(() => import.meta.env.VITE_ORG_ID ?? null, [])
 
+  const [orgs, setOrgs] = useState<OrgSummary[]>([])
+  const [orgsLoading, setOrgsLoading] = useState(true)
+  const [orgsError, setOrgsError] = useState<string | null>(null)
+  const [orgIdentifier, setOrgIdentifier] = useState<string | null>(orgIdOverride)
   const [stats, setStats] = useState<AdminStatsResponse | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+  const [refreshToken, setRefreshToken] = useState(0)
 
   const handleLogout = () => {
     clearToken()
     navigate('/')
   }
 
+  const handleRefresh = () => {
+    setRefreshToken((prev) => prev + 1)
+  }
+
+  useEffect(() => {
+    let isMounted = true
+
+    const loadOrgs = async () => {
+      setOrgsLoading(true)
+      setOrgsError(null)
+
+      try {
+        const data = await api.get<OrgSummary[]>('/api/admin/orgs')
+        if (!isMounted) return
+        setOrgs(data)
+        if (!orgIdOverride && data.length > 0) {
+          setOrgIdentifier(String(data[0].id))
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'Failed to load organizations'
+        if (isMounted) setOrgsError(message)
+      } finally {
+        if (isMounted) setOrgsLoading(false)
+      }
+    }
+
+    void loadOrgs()
+
+    return () => {
+      isMounted = false
+    }
+  }, [orgIdOverride])
+
   useEffect(() => {
     let isMounted = true
 
     const run = async () => {
+      if (!orgIdentifier) {
+        if (isMounted) {
+          setStats(null)
+          setLoading(false)
+        }
+        return
+      }
+
       setLoading(true)
       setError(null)
 
       try {
         // MVP query: org only. Add from/to later when the backend supports it.
-        const qs = new URLSearchParams({ org_id: orgId })
+        const qs = new URLSearchParams({ org_id: orgIdentifier })
         const data = await api.get<AdminStatsResponse>(`/api/admin/stats?${qs.toString()}`)
         if (isMounted) setStats(data)
       } catch (e) {
@@ -58,10 +108,12 @@ export default function Dashboard() {
     return () => {
       isMounted = false
     }
-  }, [orgId])
+  }, [orgIdentifier, refreshToken])
 
   const totalScans = stats?.total_scans ?? 0
   const risk = stats?.risk_distribution ?? { SAFE: 0, SUSPICIOUS: 0, DANGEROUS: 0 }
+  const selectedOrg = orgs.find((org) => String(org.id) === orgIdentifier)
+  const isReadyForStats = !orgsLoading && !orgsError && Boolean(orgIdentifier)
 
   return (
     <div style={{ padding: '2rem' }}>
@@ -69,16 +121,44 @@ export default function Dashboard() {
         <div>
           <h1 style={{ margin: 0 }}>LinkGuard Admin Dashboard</h1>
           <p style={{ margin: '0.25rem 0 0' }}>
-            Org: <code>{orgId}</code>
+            Org:{' '}
+            <code>{selectedOrg ? `${selectedOrg.name} (#${selectedOrg.id})` : orgIdentifier ?? '—'}</code>
           </p>
         </div>
-        <button onClick={handleLogout}>Log out</button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button onClick={handleRefresh} disabled={loading || orgsLoading || !orgIdentifier}>
+            Refresh stats
+          </button>
+          <button onClick={handleLogout}>Log out</button>
+        </div>
       </header>
 
       <section style={{ marginTop: '2rem' }}>
-        {loading && <p>Loading stats…</p>}
+        {orgsLoading && <p>Loading organizations…</p>}
 
-        {!loading && error && (
+        {!orgsLoading && orgsError && (
+          <div style={{ border: '1px solid #ddd', padding: '1rem' }}>
+            <p style={{ marginTop: 0 }}>
+              <strong>Could not load organizations.</strong>
+            </p>
+            <p style={{ marginBottom: 0 }}>{orgsError}</p>
+          </div>
+        )}
+
+        {!orgsLoading && !orgsError && orgs.length === 0 && (
+          <div style={{ border: '1px solid #ddd', padding: '1rem' }}>
+            <p style={{ marginTop: 0 }}>
+              <strong>No organizations found.</strong>
+            </p>
+            <p style={{ marginBottom: 0 }}>
+              Create an organization and API key first so scans can be attributed.
+            </p>
+          </div>
+        )}
+
+        {isReadyForStats && loading && <p>Loading stats…</p>}
+
+        {isReadyForStats && !loading && error && (
           <div style={{ border: '1px solid #ddd', padding: '1rem' }}>
             <p style={{ marginTop: 0 }}>
               <strong>Could not load stats.</strong>
@@ -90,7 +170,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {!loading && !error && stats && (
+        {isReadyForStats && !loading && !error && stats && (
           <div style={{ display: 'grid', gap: '1.25rem' }}>
             <div style={{ border: '1px solid #ddd', padding: '1rem' }}>
               <h2 style={{ marginTop: 0 }}>Total scans</h2>
