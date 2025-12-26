@@ -1,6 +1,6 @@
-
-
 # Scan Event Seeding for Admin Dashboard (Dev Only)
+
+> ℹ️ For full project setup and quick demo instructions, see the root `README.md`.
 
 This folder contains **development-only scripts** used to populate the database with realistic sample data so the **Admin Dashboard** displays meaningful metrics (totals, risk distribution, top risky domains, and daily trends).
 
