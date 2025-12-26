@@ -185,3 +185,30 @@ def test_analyze_url_rate_limit_resets_after_window(monkeypatch):
     t["now"] += 11.0
     r3 = client.post("/api/analyze-url", headers=h, json={"url": "https://example.com"})
     assert r3.status_code == 200
+
+def test_analyze_url_service_failure_returns_safe_fallback(monkeypatch):
+    _ensure_test_api_key()
+
+    # Patch the service layer the endpoint calls so it throws
+    from app.api import analyze as analyze_mod
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated failure")
+
+    monkeypatch.setattr(analyze_mod, "analyze_url_service", boom)
+
+    r = client.post(
+        "/api/analyze-url",
+        headers={"X-API-Key": TEST_API_KEY},
+        json={"url": "https://example.com"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+
+    # Still a stable contract even on failure
+    assert body["org_id"] == TEST_ORG_ID
+    assert body["category"] in {"SAFE", "SUSPICIOUS", "DANGEROUS"}
+    assert isinstance(body["score"], int)
+    assert isinstance(body["explanation"], str) and body["explanation"]
+    assert "request_id" in body and isinstance(body["request_id"], str) and body["request_id"]
