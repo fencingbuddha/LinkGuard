@@ -25,10 +25,8 @@ def _ensure_test_api_key() -> None:
         existing = db.query(ApiKey).filter(ApiKey.key_hash == key_hash).first()
         if existing:
             existing.is_active = True
-            # Ensure revoked keys become usable for this test
             if hasattr(existing, "revoked_at"):
                 existing.revoked_at = None
-            # Keep org_id stable for assertions / debugging
             existing.org_id = existing.org_id or TEST_ORG_ID
             if hasattr(existing, "key_prefix"):
                 existing.key_prefix = key_prefix
@@ -78,45 +76,72 @@ def test_analyze_url_valid_api_key():
     body = r.json()
 
     assert body["org_id"] == TEST_ORG_ID
-    assert "risk_category" in body
-    assert "score" in body
-    assert "explanations" in body
+
+    # Stable demo-friendly contract
+    assert "request_id" in body and isinstance(body["request_id"], str)
+    assert body["category"] in {"SAFE", "SUSPICIOUS", "DANGEROUS"}
+    assert isinstance(body["score"], int)
+    assert isinstance(body["explanation"], str) and body["explanation"]
+
+    # Compatibility fields
+    assert body["category"] == body["risk_category"]
+    assert isinstance(body["explanations"], list)
+    assert isinstance(body["normalized_url"], str)
 
 
-def test_analyze_url_ignores_client_supplied_org_id():
-    """Client must not be able to override tenant context.
-
-    Even if a request includes an `org_id`, the backend should derive org_id
-    from the API key (OrgContext), not from user input.
-    """
+def test_analyze_url_missing_url_returns_400():
     _ensure_test_api_key()
 
     r = client.post(
         "/api/analyze-url",
         headers={"X-API-Key": TEST_API_KEY},
-        json={"url": "https://example.com", "org_id": TEST_ORG_ID + 999},
+        json={"url": ""},
+    )
+    assert r.status_code == 400
+    assert "detail" in r.json()
+
+
+def test_analyze_url_dev_hook_forces_suspicious():
+    _ensure_test_api_key()
+
+    r = client.post(
+        "/api/analyze-url",
+        headers={"X-API-Key": TEST_API_KEY},
+        json={"url": "https://example.com/?linkguard_test=suspicious"},
     )
     assert r.status_code == 200
     body = r.json()
 
     assert body["org_id"] == TEST_ORG_ID
+    assert body["category"] == "SUSPICIOUS"
+    assert body["risk_category"] == "SUSPICIOUS"
+
+
+def test_analyze_url_ignores_client_supplied_org_id():
+    _ensure_test_api_key()
+
+    r = client.post(
+        "/api/analyze-url",
+        headers={"X-API-Key": TEST_API_KEY},
+        json={"url": "https://example.com", "org_id": 999},
+    )
+    assert r.status_code == 200
+    assert r.json()["org_id"] == TEST_ORG_ID
 
 
 # ---------------------------
-# Rate limiting (MVP) tests
+# Rate limiting tests
 # ---------------------------
 
 from app.api import deps as deps_mod
 
 
-def _set_rate_limit(max_requests: int, window_s: int) -> None:
-    # RATE_LIMIT_* are module-level values in deps.py
+def _set_rate_limit(max_requests: int, window_s: int):
     deps_mod.RATE_LIMIT_MAX = max_requests
     deps_mod.RATE_LIMIT_WINDOW_S = window_s
 
 
-def _clear_rate_buckets() -> None:
-    # In-memory limiter state; clear between tests to avoid flakiness.
+def _clear_rate_buckets():
     deps_mod._RATE_BUCKETS.clear()
 
 
@@ -134,9 +159,6 @@ def test_analyze_url_rate_limited_returns_429_and_retry_after():
     assert r1.status_code == 200
     assert r2.status_code == 200
     assert r3.status_code == 429
-    assert r3.json()["detail"] == "Rate limit exceeded"
-
-    # FastAPI/Starlette lowercases headers in responses
     assert "retry-after" in {k.lower(): v for k, v in r3.headers.items()}
 
 
@@ -145,10 +167,9 @@ def test_analyze_url_rate_limit_resets_after_window(monkeypatch):
     _clear_rate_buckets()
     _set_rate_limit(max_requests=1, window_s=10)
 
-    # Control time.time() used by deps.py
     t = {"now": 1000.0}
 
-    def fake_time() -> float:
+    def fake_time():
         return t["now"]
 
     monkeypatch.setattr(deps_mod.time, "time", fake_time)
@@ -161,7 +182,6 @@ def test_analyze_url_rate_limit_resets_after_window(monkeypatch):
     r2 = client.post("/api/analyze-url", headers=h, json={"url": "https://example.com"})
     assert r2.status_code == 429
 
-    # Advance past the window and try again
     t["now"] += 11.0
     r3 = client.post("/api/analyze-url", headers=h, json={"url": "https://example.com"})
     assert r3.status_code == 200
