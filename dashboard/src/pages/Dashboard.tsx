@@ -26,6 +26,9 @@ function formatPercent(numerator: number, denominator: number): string {
 export default function Dashboard() {
   const navigate = useNavigate()
 
+  const [authChecked, setAuthChecked] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
+
   const orgIdOverride = useMemo(() => import.meta.env.VITE_ORG_ID ?? null, [])
 
   const [orgs, setOrgs] = useState<OrgSummary[]>([])
@@ -45,6 +48,57 @@ export default function Dashboard() {
   const handleRefresh = () => {
     setRefreshToken((prev) => prev + 1)
   }
+
+  useEffect(() => {
+    let isMounted = true
+
+    const checkAuth = async () => {
+      try {
+        await api.get('/api/admin/me')
+        if (isMounted) setAuthChecked(true)
+      } catch {
+        clearToken()
+        setAuthError('Session expired. Please log in again.')
+        if (isMounted) setAuthChecked(true)
+      }
+    }
+
+    void checkAuth()
+
+    return () => {
+      isMounted = false
+    }
+  }, [navigate])
+
+  useEffect(() => {
+    let isMounted = true
+
+    const run = async () => {
+      setOrgsLoading(true)
+      setOrgsError(null)
+
+      try {
+        const data = await api.get<OrgSummary[]>('/api/admin/orgs')
+        if (!isMounted) return
+        setOrgs(data)
+
+        if (!orgIdOverride && data.length > 0) {
+          setOrgIdentifier(String(data[0].id))
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'Failed to load organizations'
+        if (isMounted) setOrgsError(message)
+      } finally {
+        if (isMounted) setOrgsLoading(false)
+      }
+    }
+
+    void run()
+
+    return () => {
+      isMounted = false
+    }
+  }, [orgIdOverride])
 
   useEffect(() => {
     let isMounted = true
@@ -79,12 +133,38 @@ export default function Dashboard() {
     return () => {
       isMounted = false
     }
-  }, [orgId, refreshToken])
+  }, [orgIdentifier, refreshToken])
 
   const totalScans = stats?.total_scans ?? 0
   const risk = stats?.risk_distribution ?? { SAFE: 0, SUSPICIOUS: 0, DANGEROUS: 0 }
   const selectedOrg = orgs.find((org) => String(org.id) === orgIdentifier)
   const isReadyForStats = !orgsLoading && !orgsError && Boolean(orgIdentifier)
+
+  if (!authChecked) {
+    return <div style={{ padding: '2rem' }}>Checking session…</div>
+  }
+
+  if (authError) {
+    return (
+      <div style={{ padding: '2rem' }}>
+        <div
+          style={{
+            border: '1px solid #f5c2c7',
+            background: '#f8d7da',
+            padding: '12px 14px',
+            borderRadius: 8,
+            maxWidth: 520,
+          }}
+        >
+          <strong>Signed out</strong>
+          <div style={{ marginTop: 6 }}>{authError}</div>
+          <button style={{ marginTop: 12 }} onClick={() => navigate('/', { replace: true })}>
+            Go to login
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={{ padding: '2rem' }}>

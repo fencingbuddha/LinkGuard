@@ -1,11 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 
 from app.api.analyze import router as analyze_router
 from app.api.admin import router as admin_router
 from app.api.admin_orgs import router as admin_orgs_router
 from app.init_db import init_db
+
+load_dotenv()
 from app.api.admin_stats import router as admin_stats_router
 
 
