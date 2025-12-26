@@ -6,6 +6,29 @@ This repository contains the **backend API** for LinkGuard, built with FastAPI a
 
 ---
 
+## ⚡ Quick Demo (Local)
+
+Spin up a fully working demo (org + admin + API key + seeded data) in under a minute.
+
+```bash
+cd backend
+python app/init_db.py
+python app/scripts/seed_admin.py
+python app/scripts/seed_api_key.py
+# Optional but recommended for a non-empty dashboard
+python app/scripts/seed_scan_events.py
+uvicorn app.main:app --reload
+```
+
+The console will print:
+- Admin login email & password
+- API key (use in `X-API-Key` header)
+- Backend base URL
+
+> 🔧 Advanced demo tooling and troubleshooting are documented in `backend/scripts/README.md`.
+
+---
+
 ## 🚀 Features (Current MVP)
 
 - API key–based authentication (per organization)
