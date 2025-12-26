@@ -2,15 +2,16 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { setToken } from '../api/client'
+import { api, setToken } from '../api/client'
 
 export default function Login() {
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
 
     if (!email || !password) {
@@ -18,8 +19,42 @@ export default function Login() {
       return
     }
 
-    setToken('dev-admin-token')
-    navigate('/dashboard')
+    setError(null)
+    setLoading(true)
+
+    try {
+      type LoginResponse = { access_token?: string; token?: string }
+
+      // Login should NOT require an existing bearer token.
+      const res = await api.post<LoginResponse>(
+        '/api/admin/login',
+        { email, password },
+        false
+      )
+
+      const token = res?.access_token ?? res?.token
+      if (!token) {
+        throw new Error('Login succeeded but no token was returned')
+      }
+
+      setToken(token)
+      navigate('/dashboard')
+    } catch (err: unknown) {
+      const e = err as {
+        response?: { data?: { detail?: unknown }; detail?: unknown }
+        message?: unknown
+      }
+
+      const msg = 
+      e?.response?.data?.detail ||
+      e?.response?.detail ||
+      e?.message ||
+      'Login failed'
+
+      setError(String(msg))
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -34,6 +69,7 @@ export default function Login() {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            required
             style={{ width: '100%' }}
           />
         </div>
@@ -44,13 +80,16 @@ export default function Login() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            required
             style={{ width: '100%' }}
           />
         </div>
 
         {error && <p style={{ color: 'red' }}>{error}</p>}
 
-        <button type="submit">Sign In</button>
+        <button type="submit" disabled={loading}>
+          {loading ? 'Signing in…' : 'Sign In'}
+        </button>
       </form>
     </div>
   )
