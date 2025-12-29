@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 import ipaddress
 import re
 
@@ -96,6 +96,39 @@ def analyze_url(url: str) -> dict:
         parsed = urlparse(normalized_url)
         host = (parsed.hostname or "").lower()
         path = (parsed.path or "").lower()
+
+        # --- DEV DEMO HOOK (deterministic demo categories) ---
+        # Use query param: ?linkguard_test=safe|suspicious|danger
+        # NOTE: We intentionally check this BEFORE scoring so demos are repeatable.
+        q = parse_qs(parsed.query)
+        mode = (q.get("linkguard_test") or [None])[0]
+        if mode:
+            m = str(mode).lower().strip()
+            if m == "safe":
+                return {
+                    "risk_category": RiskCategory.SAFE.value,
+                    "score": 0,
+                    "explanations": ["Demo override: SAFE"],
+                    "normalized_url": normalized_url,
+                    "host": host or None,
+                }
+            if m == "suspicious":
+                return {
+                    "risk_category": RiskCategory.SUSPICIOUS.value,
+                    "score": 55,
+                    "explanations": ["Demo override: SUSPICIOUS"],
+                    "normalized_url": normalized_url,
+                    "host": host or None,
+                }
+            if m in {"danger", "dangerous"}:
+                return {
+                    "risk_category": RiskCategory.DANGEROUS.value,
+                    "score": 95,
+                    "explanations": ["Demo override: DANGEROUS"],
+                    "normalized_url": normalized_url,
+                    "host": host or None,
+                }
+        # --- end DEV DEMO HOOK ---
 
         if not host:
             return {

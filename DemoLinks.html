@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>LinkGuard Demo Links</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; margin: 40px; }
+      .card { border: 1px solid #ddd; border-radius: 12px; padding: 18px; margin: 14px 0; }
+      .label { font-weight: 700; margin-bottom: 8px; }
+      a { display: inline-block; padding: 12px 16px; border-radius: 10px; text-decoration: none; border: 1px solid #999; }
+      .safe a { background: #f3fff3; }
+      .sus a { background: #fff8e6; }
+      .dan a { background: #ffecec; }
+      .hint { color: #666; margin-top: 8px; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <h1>LinkGuard Demo Links</h1>
+    <p>Click each link (don’t paste it into the address bar). The extension should analyze on click.</p>
+
+    <div class="card safe">
+      <div class="label">SAFE</div>
+      <a href="https://example.com/?linkguard_test=safe" target="_blank" rel="noreferrer">
+        https://example.com/?linkguard_test=safe
+      </a>
+      <div class="hint">Expected: SAFE (Demo override)</div>
+    </div>
+
+    <div class="card sus">
+      <div class="label">SUSPICIOUS</div>
+      <a href="https://example.com/?linkguard_test=suspicious" target="_blank" rel="noreferrer">
+        https://example.com/?linkguard_test=suspicious
+      </a>
+      <div class="hint">Expected: SUSPICIOUS</div>
+    </div>
+
+    <div class="card dan">
+      <div class="label">DANGEROUS</div>
+      <a href="https://example.com/?linkguard_test=danger" target="_blank" rel="noreferrer">
+        https://example.com/?linkguard_test=danger
+      </a>
+      <div class="hint">Expected: DANGEROUS</div>
+    </div>
+
+    <h2>Phishing Lookalike Examples</h2>
+    <p>These links demonstrate common phishing tricks such as character substitution and misleading domains.</p>
+
+    <div class="card dan">
+      <div class="label">Lookalike Domain (go0gle.com)</div>
+      <a href="http://go0gle.com" target="_blank" rel="noreferrer">
+        http://go0gle.com
+      </a>
+      <div class="hint">Expected: DANGEROUS (character substitution: 0 instead of o)</div>
+    </div>
+
+    <div class="card sus">
+      <div class="label">Misleading Subdomain (google-login.example)</div>
+      <a href="https://google-login.example/?linkguard_test=suspicious" target="_blank" rel="noreferrer">
+        https://google-login.example
+      </a>
+      <div class="hint">Expected: SUSPICIOUS (brand name used in subdomain)</div>
+    </div>
+
+    <div class="card dan">
+      <div class="label">Brand + Extra Word (paypal-secure.example)</div>
+      <a href="https://paypal-secure.example/?linkguard_test=danger" target="_blank" rel="noreferrer">
+        https://paypal-secure.example
+      </a>
+      <div class="hint">Expected: DANGEROUS (brand impersonation)</div>
+    </div>
+
+    <div class="card sus">
+      <div class="label">Homograph Style (xn--pple-43d.example)</div>
+      <a href="https://xn--pple-43d.example/?linkguard_test=suspicious" target="_blank" rel="noreferrer">
+        https://xn--pple-43d.example
+      </a>
+      <div class="hint">Expected: SUSPICIOUS (punycode / homograph risk)</div>
+    </div>
+  </body>
+</html>
