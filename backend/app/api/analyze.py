@@ -12,6 +12,7 @@ from app.models.scan_event import RiskCategory, ScanEvent
 
 from app.api.deps import OrgContext, require_api_key, rate_limit_analyze_url
 from app.services.url_analysis import analyze_url as analyze_url_service
+from app.services.sender_analysis import analyze_sender
 
 router = APIRouter()
 
@@ -71,10 +72,22 @@ class AnalyzeUrlOut(BaseModel):
 
 # --- Email scan models ---
 
+
+class AnalyzeSenderOut(BaseModel):
+    score: int
+    risk_category: str
+    explanations: List[str]
+    signals: List[str]
+
+
 class AnalyzeEmailIn(BaseModel):
-    # MVP: links-only. Sender/body can be added later.
+    # Links-only still works; sender fields are optional for Outlook integration.
     links: List[str]
     source: Optional[str] = None
+
+    from_name: Optional[str] = None
+    from_email: Optional[str] = None
+    reply_to_emails: Optional[List[str]] = None
 
 
 class AnalyzeEmailLinkOut(BaseModel):
@@ -95,7 +108,7 @@ class AnalyzeEmailOut(BaseModel):
     org_id: int
     request_id: str
 
-    # Overall verdict for the email scan (derived from worst link)
+    # Overall verdict for the email scan (derived from sender + links)
     category: str
     score: int
     explanation: str
@@ -103,6 +116,9 @@ class AnalyzeEmailOut(BaseModel):
     # Compatibility fields
     risk_category: str
     explanations: List[str]
+
+    # Sender verdict
+    sender: AnalyzeSenderOut
 
     # Per-link results
     links: List[AnalyzeEmailLinkOut]
@@ -137,7 +153,7 @@ def analyze_url_endpoint(payload: AnalyzeUrlIn, ctx: OrgContext = Depends(requir
     elif test_flag in {"suspicious", "sus"}:
         service_result = {
             "risk_category": "SUSPICIOUS",
-            "score": 60,
+            "score": 55,
             "explanations": ["Forced SUSPICIOUS via linkguard_test (dev hook)."],
             "normalized_url": url,
         }
@@ -224,13 +240,22 @@ def analyze_email_endpoint(payload: AnalyzeEmailIn, ctx: OrgContext = Depends(re
     if not isinstance(links_in, list) or len(links_in) == 0:
         raise HTTPException(status_code=400, detail="links is required")
 
-    # Helper to rank severity deterministically
-    severity_rank = {"SAFE": 0, "SUSPICIOUS": 1, "DANGEROUS": 2}
+    # Sender analysis (optional fields; defaults to SAFE when absent)
+    sender_res = analyze_sender(
+        from_name=payload.from_name,
+        from_email=payload.from_email,
+        reply_to_emails=payload.reply_to_emails or [],
+    )
+    sender_score = int(sender_res.get("score") or 0)
+    sender_rc = (sender_res.get("risk_category") or "SAFE").upper()
+    sender_explanations = sender_res.get("explanations") or []
+    sender_signals = sender_res.get("signals") or []
 
     per_link: List[Dict[str, Any]] = []
-    overall_rc = "SAFE"
-    overall_score = 0
-    overall_explanations: List[str] = []
+
+    highest_link_score = 0
+    risky_links_count = 0
+    dangerous_links_count = 0
 
     for raw_url in links_in:
         url = (str(raw_url) or "").strip()
@@ -254,7 +279,7 @@ def analyze_email_endpoint(payload: AnalyzeEmailIn, ctx: OrgContext = Depends(re
         elif test_flag in {"suspicious", "sus"}:
             service_result = {
                 "risk_category": "SUSPICIOUS",
-                "score": 60,
+                "score": 55,
                 "explanations": ["Forced SUSPICIOUS via linkguard_test (dev hook)."],
                 "normalized_url": url,
             }
@@ -301,21 +326,48 @@ def analyze_email_endpoint(payload: AnalyzeEmailIn, ctx: OrgContext = Depends(re
             }
         )
 
-        # Overall = worst link by severity, then score
-        if severity_rank.get(risk_category, 1) > severity_rank.get(overall_rc, 0):
-            overall_rc = risk_category
-            overall_score = score
-        elif risk_category == overall_rc and score > overall_score:
-            overall_score = score
+        # Track worst link score and risky link counts
+        if score > highest_link_score:
+            highest_link_score = score
 
-        if risk_category != "SAFE" and explanations:
-            overall_explanations.append(str(explanations[0]))
+        if risk_category == "DANGEROUS":
+            dangerous_links_count += 1
+            risky_links_count += 1
+        elif risk_category == "SUSPICIOUS":
+            risky_links_count += 1
 
     if not per_link:
         raise HTTPException(status_code=400, detail="links must include at least one non-empty url")
 
+    # Unified verdict (Acceptance Criteria)
+    overall_score = max(sender_score, highest_link_score)
+
+    if overall_score >= 60:
+        overall_rc = "DANGEROUS"
+    elif overall_score >= 25:
+        overall_rc = "SUSPICIOUS"
+    else:
+        overall_rc = "SAFE"
+
+    # Overall explanations: summarize top sender risks + risky link counts
+    overall_explanations: List[str] = []
+
+    if sender_explanations:
+        overall_explanations.append(str(sender_explanations[0]))
+
+    if risky_links_count > 0:
+        if dangerous_links_count > 0:
+            overall_explanations.append(
+                f"{dangerous_links_count} dangerous link(s) and {risky_links_count - dangerous_links_count} suspicious link(s) detected."
+            )
+        else:
+            overall_explanations.append(f"{risky_links_count} suspicious link(s) detected.")
+    else:
+        overall_explanations.append("No suspicious links detected.")
+
+    # Fallback guard
     if not overall_explanations:
-        overall_explanations = ["No suspicious links detected."]
+        overall_explanations = ["No suspicious signals detected."]
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     logger.info(
@@ -327,6 +379,7 @@ def analyze_email_endpoint(payload: AnalyzeEmailIn, ctx: OrgContext = Depends(re
             "latency_ms": latency_ms,
             "link_count": len(per_link),
             "source": payload.source or "",
+            "sender_score": sender_score,
         },
     )
 
@@ -338,5 +391,11 @@ def analyze_email_endpoint(payload: AnalyzeEmailIn, ctx: OrgContext = Depends(re
         "explanation": str(overall_explanations[0]),
         "risk_category": overall_rc,
         "explanations": overall_explanations[:3],
+        "sender": {
+            "score": sender_score,
+            "risk_category": sender_rc,
+            "explanations": sender_explanations,
+            "signals": sender_signals,
+        },
         "links": per_link,
     }
