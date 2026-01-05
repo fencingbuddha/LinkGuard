@@ -19,15 +19,33 @@ router = APIRouter()
 logger = logging.getLogger("linkguard.analyze")
 
 
-def _record_scan_event(*, org_id: int, normalized_url: str, risk_category: str) -> None:
+def _record_scan_event(
+    *,
+    org_id: int,
+    normalized_url: str,
+    risk_category: str,
+    request_id: str | None = None,
+    source: str | None = None,
+    scan_type: str | None = None,
+    artifact: str | None = None,
+) -> None:
     """Best-effort persistence of ScanEvent for admin analytics.
 
     This should never break the analyze endpoint; failures are swallowed.
     """
     try:
-        host = urlparse(normalized_url or "").netloc or ""
-        # Strip port if present (e.g., example.com:443)
-        domain = host.split(":", 1)[0] if host else "unknown"
+        parsed = urlparse(normalized_url or "")
+
+        domain = "unknown"
+        if parsed.scheme == "mailto":
+            # mailto:user@domain.com -> domain.com
+            addr = (parsed.path or "").strip()
+            if "@" in addr:
+                domain = addr.split("@", 1)[1].lower() or "unknown"
+        else:
+            host = parsed.netloc or ""
+            # Strip port if present (e.g., example.com:443)
+            domain = host.split(":", 1)[0].lower() if host else "unknown"
 
         # Normalize to enum
         rc = (risk_category or "").upper()
@@ -41,6 +59,10 @@ def _record_scan_event(*, org_id: int, normalized_url: str, risk_category: str) 
                     org_id=org_id,
                     domain=domain,
                     risk_category=RiskCategory(rc),
+                    request_id=request_id,
+                    source=source,
+                    scan_type=scan_type,
+                    artifact=artifact or normalized_url,
                 )
             )
             s.commit()
@@ -191,6 +213,10 @@ def analyze_url_endpoint(payload: AnalyzeUrlIn, ctx: OrgContext = Depends(requir
         org_id=ctx.org_id,
         normalized_url=normalized_url,
         risk_category=risk_category,
+        request_id=request_id,
+        source="api_analyze_url",
+        scan_type="url",
+        artifact=normalized_url,
     )
 
     latency_ms = int((time.perf_counter() - started) * 1000)
@@ -250,6 +276,17 @@ def analyze_email_endpoint(payload: AnalyzeEmailIn, ctx: OrgContext = Depends(re
     sender_rc = (sender_res.get("risk_category") or "SAFE").upper()
     sender_explanations = sender_res.get("explanations") or []
     sender_signals = sender_res.get("signals") or []
+
+    if payload.from_email:
+        _record_scan_event(
+            org_id=ctx.org_id,
+            normalized_url=f"mailto:{payload.from_email}",
+            risk_category=sender_rc,
+            request_id=request_id,
+            source=payload.source,
+            scan_type="email_sender",
+            artifact=payload.from_email,
+        )
 
     per_link: List[Dict[str, Any]] = []
 
@@ -312,7 +349,15 @@ def analyze_email_endpoint(payload: AnalyzeEmailIn, ctx: OrgContext = Depends(re
         normalized_url = service_result.get("normalized_url") or url
 
         # Best-effort event logging per link
-        _record_scan_event(org_id=ctx.org_id, normalized_url=normalized_url, risk_category=risk_category)
+        _record_scan_event(
+            org_id=ctx.org_id,
+            normalized_url=normalized_url,
+            risk_category=risk_category,
+            request_id=request_id,
+            source=payload.source,
+            scan_type="email_link",
+            artifact=normalized_url,
+        )
 
         per_link.append(
             {

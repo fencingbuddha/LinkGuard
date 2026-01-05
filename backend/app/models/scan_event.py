@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from datetime import datetime
 import enum
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String
+from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -27,6 +27,15 @@ class ScanEvent(Base):
         index=True,
     )
     domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+
+    # Optional context for email-based scans (Outlook add-in, etc.)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    scan_type: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+
+    # Optional original artifact identifier (e.g., full URL or mailto:address) for debugging
+    artifact: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     risk_category: Mapped[RiskCategory] = mapped_column(
         Enum(RiskCategory), nullable=False
     )
