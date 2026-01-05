@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { api, setToken } from '../api/client'
+import { api, setToken, ApiError } from '../api/client'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -40,16 +40,33 @@ export default function Login() {
       setToken(token)
       navigate('/dashboard')
     } catch (err: unknown) {
+      // Prefer structured API errors from our client wrapper
+      if (err instanceof ApiError) {
+        if (err.status === 401) {
+          setError('Invalid email or password')
+        } else if (String(err.message).toLowerCase().includes('backend unreachable')) {
+          setError('Server unavailable. Please try again.')
+        } else {
+          setError(err.message || 'Login failed')
+        }
+        return
+      }
+
+      // Fallback for unexpected errors
       const e = err as {
-        response?: { data?: { detail?: unknown }; detail?: unknown }
+        response?: { status?: number; data?: { detail?: unknown } }
         message?: unknown
       }
 
-      const msg = 
-      e?.response?.data?.detail ||
-      e?.response?.detail ||
-      e?.message ||
-      'Login failed'
+      if (e?.response?.status === 401) {
+        setError('Invalid email or password')
+        return
+      }
+
+      const msg =
+        e?.response?.data?.detail ??
+        e?.message ??
+        'Login failed'
 
       setError(String(msg))
     } finally {

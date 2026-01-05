@@ -1,19 +1,20 @@
-// frontend/src/admin/auth.ts
-export const ADMIN_TOKEN_KEY = "linkguard_admin_token";
+// dashboard/src/routes/admin/auth.ts
 
-export function getAdminToken(): string | null {
-  return localStorage.getItem(ADMIN_TOKEN_KEY);
+export const ADMIN_API_KEY_STORAGE = "linkguard_admin_api_key";
+
+export function getAdminApiKey(): string | null {
+  return localStorage.getItem(ADMIN_API_KEY_STORAGE);
 }
 
-export function setAdminToken(token: string): void {
-  localStorage.setItem(ADMIN_TOKEN_KEY, token);
+export function setAdminApiKey(apiKey: string): void {
+  localStorage.setItem(ADMIN_API_KEY_STORAGE, apiKey);
 }
 
-export function clearAdminToken(): void {
-  localStorage.removeItem(ADMIN_TOKEN_KEY);
+export function clearAdminApiKey(): void {
+  localStorage.removeItem(ADMIN_API_KEY_STORAGE);
 }
 
 export function adminAuthHeader(): Record<string, string> {
-  const token = getAdminToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  const apiKey = getAdminApiKey();
+  return apiKey ? { "X-API-Key": apiKey } : {};
 }

@@ -1,6 +1,10 @@
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+function normalizeBaseUrl(url: string): string {
+  return url.replace(/\/+$/, '')
+}
+
+const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000')
 
 // Primary storage key used by the dashboard.
 const TOKEN_KEY = 'linkguard_admin_token'
@@ -9,6 +13,18 @@ const TOKEN_KEY = 'linkguard_admin_token'
 // We will prefer a JWT-looking value (three base64url-ish segments separated by dots)
 // and migrate it into TOKEN_KEY for consistency.
 const FALLBACK_TOKEN_KEYS = ['access_token', 'linkguard_access_token', 'token', 'jwt'] as const
+
+export class ApiError extends Error {
+  status?: number
+  body?: unknown
+
+  constructor(message: string, status?: number, body?: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+  }
+}
 
 function looksLikeJwt(token: string): boolean {
   // JWTs are typically: header.payload.signature
@@ -87,12 +103,20 @@ export async function apiRequest<T>(
     if (token) headers.Authorization = `Bearer ${token}`
   }
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers,
-    body,
-    signal: options?.signal,
-  })
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE_URL}${normalizedPath}`, {
+      method,
+      headers,
+      body,
+      signal: options?.signal,
+    })
+  } catch {
+    // Covers backend down, CORS, DNS, etc.
+    throw new ApiError('Network error: backend unreachable')
+  }
 
   const contentType = res.headers.get('content-type') ?? ''
   const isJson = contentType.includes('application/json')
@@ -102,6 +126,12 @@ export async function apiRequest<T>(
     type ErrorPayload = {
       detail?: unknown
       message?: unknown
+      error?: unknown
+    }
+
+    // If auth is no longer valid, clear stored tokens so the UI can redirect cleanly.
+    if (res.status === 401) {
+      clearToken()
     }
 
     const message = (() => {
@@ -111,12 +141,13 @@ export async function apiRequest<T>(
         const err = payload as ErrorPayload
         if (err.detail) return String(err.detail)
         if (err.message) return String(err.message)
+        if (err.error) return String(err.error)
       }
 
       return `Request failed: ${res.status} ${res.statusText}`
     })()
 
-    throw new Error(message)
+    throw new ApiError(message, res.status, payload)
   }
 
   return payload as T
